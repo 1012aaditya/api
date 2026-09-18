@@ -1,10 +1,12 @@
 # Developer entry points. Everything runs from the repository root.
 
-BACKEND := backend
-PY      := $(BACKEND)/.venv/bin/python
-PIP     := $(BACKEND)/.venv/bin/pip
+BACKEND  := backend
+FRONTEND := frontend
+PY       := $(BACKEND)/.venv/bin/python
+PIP      := $(BACKEND)/.venv/bin/pip
 
-.PHONY: help setup deps up down migrate revision run test lint fmt purge clean
+.PHONY: help setup setup-web up down migrate revision run web build-web test test-web \
+	lint lint-web purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -31,11 +33,29 @@ revision: ## Autogenerate a migration: make revision m="add webhooks"
 run: ## Run the API with reload on http://localhost:8000
 	cd $(BACKEND) && .venv/bin/uvicorn app.main:app --reload --port 8000
 
-test: ## Run the test suite (needs no services)
+setup-web: ## Install the dashboard's dependencies
+	cd $(FRONTEND) && npm install
+	@test -f $(FRONTEND)/.env.local || (cp $(FRONTEND)/.env.local.example $(FRONTEND)/.env.local \
+		&& echo "Created frontend/.env.local from the example.")
+
+web: ## Run the dashboard on http://localhost:3000 (needs `make run` too)
+	cd $(FRONTEND) && npm run dev
+
+build-web: ## Production build of the dashboard
+	cd $(FRONTEND) && npm run build
+
+test: ## Run the backend test suite (needs no services)
 	cd $(BACKEND) && .venv/bin/python -m pytest -q
 
-lint: ## Lint
+test-web: ## Typecheck the dashboard, then smoke-test it in a real browser
+	cd $(FRONTEND) && npm run typecheck
+	cd $(FRONTEND) && npm run smoke
+
+lint: ## Lint the backend
 	cd $(BACKEND) && .venv/bin/ruff check .
+
+lint-web: ## Typecheck the dashboard
+	cd $(FRONTEND) && npm run typecheck
 
 fmt: ## Format and auto-fix
 	cd $(BACKEND) && .venv/bin/ruff check --fix . && .venv/bin/ruff format .
@@ -45,4 +65,4 @@ purge: ## Delete documents past their retention window
 
 clean: ## Remove caches
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
-	rm -rf $(BACKEND)/.pytest_cache $(BACKEND)/.ruff_cache
+	rm -rf $(BACKEND)/.pytest_cache $(BACKEND)/.ruff_cache $(FRONTEND)/.next

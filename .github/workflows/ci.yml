@@ -37,3 +37,28 @@ jobs:
         run: |
           alembic upgrade head
           alembic check
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      # The browser smoke check needs a running stack, so CI covers the parts
+      # that do not: types and a production build.
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build

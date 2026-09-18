@@ -23,13 +23,14 @@ Every response carries a `request_id` — quote it in support requests.
 
 
 def _build_v1_router() -> APIRouter:
-    from app.api.v1 import api_keys, auth, documents, invoices
+    from app.api.v1 import api_keys, auth, documents, invoices, usage
 
     router = APIRouter(prefix="/v1")
     router.include_router(auth.router)
     router.include_router(api_keys.router)
     router.include_router(invoices.router)
     router.include_router(documents.router)
+    router.include_router(usage.router)
     return router
 
 

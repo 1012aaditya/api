@@ -73,13 +73,28 @@ class ExtractionService:
         started = utcnow()
 
         # 1. Cheap, local checks first. A bad file never reaches storage or
-        #    the provider, and never consumes quota.
-        file = validate_upload(
-            upload.content,
-            filename=upload.filename,
-            max_size_bytes=settings.max_file_size_bytes,
-            max_page_count=settings.max_page_count,
-        )
+        #    the provider, and never consumes quota — but it is still a request
+        #    the caller made, so it is still recorded. Without this, someone
+        #    debugging "my uploads keep failing" sees an empty request log.
+        try:
+            file = validate_upload(
+                upload.content,
+                filename=upload.filename,
+                max_size_bytes=settings.max_file_size_bytes,
+                max_page_count=settings.max_page_count,
+            )
+        except DocuParseError as exc:
+            await self._record_usage_out_of_band(
+                auth=auth,
+                endpoint=endpoint,
+                request_id=request_id,
+                status_code=exc.status_code,
+                error_code=exc.code,
+                billable=False,
+                pages=0,
+                duration_ms=int((utcnow() - started).total_seconds() * 1000),
+            )
+            raise
 
         # 2. Refuse early if extraction cannot actually happen (§42).
         try:
@@ -140,6 +155,30 @@ class ExtractionService:
             request_id=request_id,
             endpoint=endpoint,
             result=result,
+        )
+
+    async def record_rejected_request(
+        self,
+        *,
+        auth: AuthContext,
+        request_id: str,
+        error: DocuParseError,
+        endpoint: str = "/v1/invoices/extract",
+    ) -> None:
+        """Log a request refused before the service could run.
+
+        The upload reader rejects an oversized body mid-stream, in the route,
+        so that path never reaches ``extract_invoice``. It is still a request
+        the caller made and still belongs in their log.
+        """
+        await self._record_usage_out_of_band(
+            auth=auth,
+            endpoint=endpoint,
+            request_id=request_id,
+            status_code=error.status_code,
+            error_code=error.code,
+            billable=False,
+            pages=0,
         )
 
     # --- steps ---------------------------------------------------------
@@ -229,10 +268,11 @@ class ExtractionService:
 
         await UsageRepository(self._db).record(
             organization_id=auth.organization_id,
-            api_key_id=auth.api_key.id,
+            api_key_id=auth.api_key_id,
             document_id=document_id,
             request_id=request_id,
             endpoint=endpoint,
+            event_type=auth.usage_event_type,
             status_code=200,
             success=True,
             billable=True,
@@ -327,10 +367,11 @@ class ExtractionService:
                 document.status = DocumentStatus.FAILED
             await UsageRepository(session).record(
                 organization_id=auth.organization_id,
-                api_key_id=auth.api_key.id,
+                api_key_id=auth.api_key_id,
                 document_id=document_id,
                 request_id=request_id,
                 endpoint=endpoint,
+                event_type=auth.usage_event_type,
                 status_code=error.status_code,
                 success=False,
                 # The provider was called and billed us, so this consumes quota
@@ -355,19 +396,22 @@ class ExtractionService:
         billable: bool,
         pages: int,
         estimated_cost_usd: Decimal | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         await self._db.commit()
         async with get_session_factory()() as session:
             await UsageRepository(session).record(
                 organization_id=auth.organization_id,
-                api_key_id=auth.api_key.id,
+                api_key_id=auth.api_key_id,
                 request_id=request_id,
                 endpoint=endpoint,
+                event_type=auth.usage_event_type,
                 status_code=status_code,
                 success=False,
                 billable=billable,
                 pages=pages,
                 error_code=error_code,
                 estimated_cost_usd=estimated_cost_usd,
+                duration_ms=duration_ms,
             )
             await session.commit()

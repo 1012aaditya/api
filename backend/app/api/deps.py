@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import Literal
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,15 +30,32 @@ from app.repositories.users import UserRepository
 
 @dataclass(frozen=True)
 class AuthContext:
-    """Who is making this request, and what they are allowed to spend."""
+    """Who is making this request, and what they are allowed to spend.
+
+    Two kinds of caller resolve to this: an API key (machine traffic) and a
+    dashboard session (a signed-in human). Both are scoped to exactly one
+    organization, so authorization downstream is identical — only the audit
+    trail differs, which is what ``actor`` and ``api_key`` record.
+    """
 
     organization: Organization
-    api_key: APIKey
     settings: Settings
+    api_key: APIKey | None = None
+    actor: Literal["api_key", "session"] = "api_key"
+    user: User | None = None
 
     @property
     def organization_id(self) -> str:
         return self.organization.id
+
+    @property
+    def api_key_id(self) -> str | None:
+        return self.api_key.id if self.api_key else None
+
+    @property
+    def usage_event_type(self) -> str:
+        """Distinguishes dashboard-driven work from real API traffic (§21)."""
+        return "api_request" if self.actor == "api_key" else "dashboard_request"
 
     @property
     def rate_limit_per_minute(self) -> int:
@@ -102,11 +120,50 @@ async def authenticate_api_key(
     request.state.organization_id = organization.id
     request.state.api_key_id = api_key.id
     await APIKeyRepository(db).touch_last_used(api_key)
-    return AuthContext(organization=organization, api_key=api_key, settings=settings)
+    return AuthContext(
+        organization=organization, api_key=api_key, settings=settings, actor="api_key"
+    )
+
+
+async def authenticate_session(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthContext:
+    """Resolve a dashboard session token to its organization."""
+    context = await get_current_user(request, db)
+    return AuthContext(
+        organization=context.organization,
+        settings=settings,
+        api_key=None,
+        actor="session",
+        user=context.user,
+    )
+
+
+async def authenticate_any(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthContext:
+    """Accept either an API key or a dashboard session.
+
+    The dashboard needs to read the same organization-scoped data the API
+    exposes, and it holds a session token rather than a key — keys are stored
+    hashed and cannot be replayed from the browser. Both credentials resolve
+    to one organization, so what follows is identical either way.
+
+    The token's own shape decides which path runs, so this never tries a
+    session lookup with an API key or vice versa.
+    """
+    token = _bearer_token(request)
+    if looks_like_api_key(token):
+        return await authenticate_api_key(request, db, settings)
+    return await authenticate_session(request, db, settings)
 
 
 async def enforce_rate_limit(
-    auth: AuthContext = Depends(authenticate_api_key),
+    auth: AuthContext = Depends(authenticate_any),
 ) -> AuthContext:
     decision = await get_rate_limiter().check(
         f"org:{auth.organization_id}", limit=auth.rate_limit_per_minute, window_seconds=60

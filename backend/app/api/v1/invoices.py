@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, enforce_document_quota, get_request_id
-from app.core.errors import FileTooLargeError, InvalidRequestError
+from app.core.errors import DocuParseError, FileTooLargeError, InvalidRequestError
 from app.db.session import get_db
 from app.schemas.common import ErrorResponse
 from app.schemas.extraction import ExtractionResponse
@@ -66,8 +66,18 @@ async def extract_invoice(
     if file is None or not file.filename:
         raise InvalidRequestError("No file was provided in the 'file' form field.")
 
-    content = await _read_upload(file, max_size_bytes=auth.settings.max_file_size_bytes)
     service = ExtractionService(db)
+    try:
+        content = await _read_upload(
+            file, max_size_bytes=auth.settings.max_file_size_bytes
+        )
+    except DocuParseError as exc:
+        # Rejected while still reading the body, so the service never ran.
+        await service.record_rejected_request(
+            auth=auth, request_id=request_id, error=exc
+        )
+        raise
+
     return await service.extract_invoice(
         auth=auth,
         upload=UploadedFile(content=content, filename=file.filename),

@@ -105,3 +105,82 @@ class UsageRepository:
             if row.estimated_cost_usd is not None
             else Decimal("0"),
         }
+
+    def _day_expression(self):
+        """A ``YYYY-MM-DD`` day key, computed in the database.
+
+        Deliberately dialect-aware rather than clever: Postgres and SQLite
+        disagree about date functions, and getting this wrong silently
+        buckets a dashboard's chart into the wrong days.
+        """
+        if self.session.bind is not None and self.session.bind.dialect.name == "postgresql":
+            return func.to_char(func.timezone("UTC", UsageEvent.created_at), "YYYY-MM-DD")
+        return func.strftime("%Y-%m-%d", UsageEvent.created_at)
+
+    async def daily_series(
+        self, organization_id: str, *, since: dt.datetime, until: dt.datetime | None = None
+    ) -> list[dict[str, object]]:
+        """Per-day request counts, with every day in the window present.
+
+        Days with no traffic are returned as zeroes rather than omitted. A
+        series that skips empty days draws two months apart as neighbours and
+        silently misstates the shape of the traffic.
+        """
+        day = self._day_expression().label("day")
+        result = await self.session.execute(
+            select(
+                day,
+                func.count().label("requests"),
+                func.sum(func.cast(UsageEvent.success, Integer)).label("successful"),
+                func.sum(func.cast(UsageEvent.billable, Integer)).label("documents"),
+            )
+            .where(
+                UsageEvent.organization_id == organization_id,
+                UsageEvent.created_at >= since,
+            )
+            .group_by(day)
+            .order_by(day)
+        )
+        observed = {
+            row.day: {
+                "day": row.day,
+                "requests": int(row.requests or 0),
+                "successful": int(row.successful or 0),
+                "failed": int(row.requests or 0) - int(row.successful or 0),
+                "documents": int(row.documents or 0),
+            }
+            for row in result.all()
+        }
+
+        end = (until or dt.datetime.now(dt.UTC)).date()
+        start = since.date()
+        series: list[dict[str, object]] = []
+        cursor = start
+        while cursor <= end:
+            key = cursor.isoformat()
+            series.append(
+                observed.get(
+                    key,
+                    {
+                        "day": key,
+                        "requests": 0,
+                        "successful": 0,
+                        "failed": 0,
+                        "documents": 0,
+                    },
+                )
+            )
+            cursor += dt.timedelta(days=1)
+        return series
+
+    async def recent_events(
+        self, organization_id: str, *, limit: int = 20, offset: int = 0
+    ) -> list[UsageEvent]:
+        result = await self.session.execute(
+            select(UsageEvent)
+            .where(UsageEvent.organization_id == organization_id)
+            .order_by(UsageEvent.created_at.desc())
+            .limit(min(limit, 200))
+            .offset(offset)
+        )
+        return list(result.scalars().all())

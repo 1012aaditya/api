@@ -134,10 +134,20 @@ async def test_the_limiter_fails_open_when_its_backend_is_down() -> None:
     assert decision.allowed is True
 
 
-async def test_in_memory_limiter_rolls_over_between_windows() -> None:
+async def test_in_memory_limiter_rolls_over_between_windows(monkeypatch) -> None:
+    """Time is driven, not waited on — a timing-dependent test is a flaky test."""
+    import app.core.rate_limit as rate_limit
+
+    now = [1_000_000.0]
+    monkeypatch.setattr(rate_limit.time, "time", lambda: now[0])
+
     limiter = InMemoryRateLimiter()
     for _ in range(3):
-        await limiter.check("k", limit=3, window_seconds=60)
-    assert not (await limiter.check("k", limit=3, window_seconds=60)).allowed
-    # A one-second window has certainly rolled over by the next call.
-    assert (await limiter.check("k", limit=3, window_seconds=1)).allowed
+        assert (await limiter.check("k", limit=3, window_seconds=60)).allowed
+    blocked = await limiter.check("k", limit=3, window_seconds=60)
+    assert not blocked.allowed
+    assert blocked.remaining == 0
+    assert blocked.retry_after_seconds >= 1
+
+    now[0] += 60  # into the next window
+    assert (await limiter.check("k", limit=3, window_seconds=60)).allowed

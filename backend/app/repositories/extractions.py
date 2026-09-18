@@ -83,3 +83,30 @@ class ExtractionRepository:
         self.session.add(row)
         await self.session.flush()
         return row
+
+    async def latest_for_document(
+        self, organization_id: str, document_id: str
+    ) -> tuple[Extraction, ValidationResult | None] | None:
+        """The most recent extraction attempt for a document, with its checks."""
+        result = await self.session.execute(
+            select(Extraction)
+            .where(
+                Extraction.organization_id == organization_id,
+                Extraction.document_id == document_id,
+            )
+            .order_by(Extraction.created_at.desc())
+            .limit(1)
+        )
+        extraction = result.scalar_one_or_none()
+        if extraction is None:
+            return None
+
+        validation = (
+            await self.session.execute(
+                select(ValidationResult).where(
+                    ValidationResult.organization_id == organization_id,
+                    ValidationResult.extraction_id == extraction.id,
+                )
+            )
+        ).scalar_one_or_none()
+        return extraction, validation

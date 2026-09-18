@@ -20,6 +20,7 @@ from app.db.base import utcnow
 from app.db.session import get_db
 from app.models import Document, DocumentStatus
 from app.repositories.documents import DocumentRepository
+from app.repositories.extractions import ExtractionRepository
 from app.schemas.common import SuccessResponse
 from app.services.storage import get_object_store
 
@@ -121,3 +122,81 @@ async def delete_document(
         reason="api_request",
     )
     return SuccessResponse(request_id=request_id, data=_summary(document))
+
+
+class StoredExtraction(BaseModel):
+    """A stored extraction, as the dashboard and the documents API return it."""
+
+    id: str
+    document_id: str
+    request_id: str | None
+    status: str
+    document_type: str
+    data: dict | None
+    confidence: dict | None
+    overall_confidence: float | None
+    validation: dict | None
+    provider: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    estimated_cost_usd: float | None
+    provider_latency_ms: int | None
+    total_latency_ms: int | None
+    error_code: str | None
+    error_message: str | None
+    created_at: dt.datetime
+
+
+@router.get(
+    "/{document_id}/extraction",
+    response_model=SuccessResponse[StoredExtraction],
+    summary="The stored extraction result for a document",
+)
+async def get_document_extraction(
+    document_id: str,
+    auth: AuthContext = Depends(enforce_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[StoredExtraction]:
+    documents = DocumentRepository(db)
+    if await documents.get(auth.organization_id, document_id) is None:
+        raise NotFoundError("No document with that id exists in this organization.")
+
+    found = await ExtractionRepository(db).latest_for_document(
+        auth.organization_id, document_id
+    )
+    if found is None:
+        raise NotFoundError("That document has no extraction result yet.")
+
+    extraction, validation = found
+    return SuccessResponse(
+        request_id=request_id,
+        data=StoredExtraction(
+            id=extraction.id,
+            document_id=extraction.document_id,
+            request_id=extraction.request_id,
+            status=extraction.status,
+            document_type=extraction.document_type,
+            data=extraction.data,
+            confidence=extraction.field_confidence,
+            overall_confidence=extraction.overall_confidence,
+            validation=(
+                {"overall": validation.overall, "checks": validation.checks}
+                if validation is not None
+                else None
+            ),
+            provider=extraction.provider,
+            model=extraction.model,
+            input_tokens=extraction.input_tokens,
+            output_tokens=extraction.output_tokens,
+            estimated_cost_usd=float(extraction.estimated_cost_usd)
+            if extraction.estimated_cost_usd is not None
+            else None,
+            provider_latency_ms=extraction.provider_latency_ms,
+            total_latency_ms=extraction.total_latency_ms,
+            error_code=extraction.error_code,
+            error_message=extraction.error_message,
+            created_at=extraction.created_at,
+        ),
+    )

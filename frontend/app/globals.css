@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/*
+ * Light theme only, on purpose.
+ *
+ * The chart colours are not decorative choices: #2a78d6 and #d03b3b were run
+ * through a colour-vision-deficiency validator against this surface and clear
+ * every gate (CVD ΔE 23.8, normal-vision ΔE 31.6, both ≥ 3:1 contrast).
+ * Changing them means re-validating, not just picking something nicer.
+ */
+@theme {
+  /* Surfaces */
+  --color-page: #f9f9f7;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #fcfcfb;
+
+  /* Ink */
+  --color-ink: #0b0b0b;
+  --color-ink-2: #52514e;
+  --color-muted: #898781;
+
+  /* Chrome */
+  --color-line: #e6e5df;
+  --color-grid: #e1e0d9;
+  --color-axis: #c3c2b7;
+
+  /* Accent (sequential blue ramp) */
+  --color-accent-100: #cde2fb;
+  --color-accent-250: #86b6ef;
+  --color-accent: #2a78d6;
+  --color-accent-600: #184f95;
+
+  /* Status — reserved, never reused as a series colour */
+  --color-good: #0ca30c;
+  --color-good-ink: #006300;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus that is visible without being loud. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Columns of numbers align; standalone display numbers do not (they look
+   loose with tabular figures). */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -15,11 +15,9 @@ vision extraction, normalization, schema validation, **business validation**
 and confidence scoring, and it reports every one of those separately. The
 value is in knowing which fields you can trust.
 
-> **Status: MVP, backend only.** Phases 1–10 of the build plan are complete:
-> scaffolding, database, authentication, upload, preprocessing, the AI
-> provider abstraction, the typed schema, GST business validation, the API
-> response, and the test suite. Async jobs, the dashboard, the playground,
-> webhooks and the Python SDK are not built yet — see
+> **Status: MVP.** The API (phases 1–10) and the developer dashboard with its
+> API playground (phases 13–14) are built and working. Async jobs, webhooks and
+> the Python SDK are not — see
 > [What is not built yet](#what-is-not-built-yet).
 
 ---
@@ -103,15 +101,27 @@ curl -X POST http://localhost:8000/v1/invoices/extract \
   -F "file=@invoice.pdf"
 ```
 
-### 6. Run the tests
+### 6. Run the dashboard
 
 ```bash
-make test           # 211 tests, no services required
-make lint
+make setup-web      # npm install + frontend/.env.local
+make web            # http://localhost:3000
 ```
 
-The suite runs entirely on SQLite and in-memory doubles, so it needs neither
-Postgres, Redis, nor an AI provider.
+Sign up at <http://localhost:3000/signup>, then use the **Playground** to run an
+invoice through the API and see the JSON, the validation report, the per-field
+confidence and a copy-pasteable cURL command.
+
+### 7. Run the tests
+
+```bash
+make test           # 226 backend tests, no services required
+make lint
+make test-web       # typecheck + browser smoke check (needs both servers up)
+```
+
+The backend suite runs entirely on SQLite and in-memory doubles, so it needs
+neither Postgres, Redis, nor an AI provider.
 
 ---
 
@@ -295,12 +305,50 @@ Consistent envelope, stable codes, no stack traces and no provider details:
 | `GET` | `/v1/documents` | API key | List your documents. |
 | `GET` | `/v1/documents/{id}` | API key | One document's metadata. |
 | `DELETE` | `/v1/documents/{id}` | API key | Delete the stored bytes now. |
+| `GET` | `/v1/documents/{id}/extraction` | either | The stored result for a document. |
+| `GET` | `/v1/usage` | either | Totals, quota status, and a daily series. |
+| `GET` | `/v1/usage/events` | either | The request log, newest first. |
 
-API keys authenticate machine traffic. Session tokens authenticate the
-dashboard. They are deliberately not interchangeable: a leaked API key cannot
-mint more keys, and a session token cannot call `/v1/invoices/extract`.
+API keys authenticate machine traffic; session tokens authenticate the
+dashboard. **Key management is session-only** — a leaked API key cannot mint
+more keys. Read endpoints marked *either* accept both, because the dashboard
+holds a session rather than a key (keys are stored hashed and cannot be
+replayed from the browser) and needs to read the same data.
+
+`/v1/invoices/extract` also accepts a session, so the playground can run a real
+extraction. Those runs are tagged `dashboard_request` in the usage log and cost
+and count exactly like an API call — the playground does not get a free path.
 
 ---
+
+## Dashboard and playground
+
+`frontend/` is a Next.js 15 app in TypeScript and Tailwind 4 — a light theme
+only, deliberately: this is developer infrastructure, so it is quiet, dense and
+free of gradients and animation.
+
+| Page | What it does |
+|---|---|
+| `/dashboard` | Requests, documents, success rate, average latency, a 30-day chart, quota, and the recent request log. |
+| `/playground` | Upload an invoice, run it, and see the JSON, validation, per-field confidence, timing and a cURL command. |
+| `/documents` | Everything uploaded, with per-document extraction results and one-click deletion. |
+| `/usage` | 7/30/90-day totals and the full request log, with the estimated provider cost per request. |
+| `/api-keys` | Create, rotate and revoke. The secret is shown once, at creation. |
+| `/docs` | Quickstart, cURL/Python/JavaScript examples, the error table, and what is not built yet. |
+| `/settings` | The organization, the account, and which API the dashboard is pointed at. |
+
+There is no `/webhooks` or `/billing` page, because neither works yet. Listing
+them as greyed-out menu items would make the dashboard look more finished than
+it is.
+
+### The chart is not decorative
+
+The two series colours (`#2a78d6`, `#d03b3b`) were run through a
+colour-vision-deficiency validator against the page surface and clear every
+gate — CVD ΔE 23.8, normal-vision ΔE 31.6, both above 3:1 contrast. Changing
+them means re-validating, not just picking something nicer. The daily series is
+filled end to end, so a month with no traffic renders as a month of zeroes
+rather than drawing two distant days as neighbours.
 
 ## Architecture
 
@@ -447,6 +495,9 @@ make revision m="add webhooks"
 make run        # uvicorn with reload
 make test       # pytest — needs no services
 make lint       # ruff
+make setup-web  # npm install for the dashboard
+make web        # the dashboard on :3000
+make test-web   # typecheck + browser smoke check
 make purge      # run the retention sweeper
 ```
 
@@ -458,11 +509,18 @@ a model change without a migration fails the suite rather than production.
 
 ### Tests
 
-211 tests covering authentication, API key lifecycle, file validation, the
-invoice schema, GSTIN validation, invoice and line-item arithmetic, the
+226 backend tests covering authentication, API key lifecycle, file validation,
+the invoice schema, GSTIN validation, invoice and line-item arithmetic, the
 extraction response, missing fields, malformed files, rate limiting, quota,
 tenant isolation, webhook signatures, provider retry and failure handling,
-retention, and log redaction.
+retention, usage reporting, and log redaction.
+
+The dashboard is checked by `frontend/scripts/smoke.mjs`, which drives a real
+browser against a running stack (`npx playwright install chromium` once, then
+`make test-web` with both servers up): it signs in, asserts every page renders live
+data, checks for horizontal overflow at three widths, and fails if a full API
+key ever appears in the rendered HTML. A component test would not have caught
+the two layout bugs it found.
 
 Fixtures are synthetic. `tests/fixtures/pdf_builder.py` writes real
 text-bearing PDFs, and `tests/fixtures/invoices.py` renders GST invoices from
@@ -480,7 +538,6 @@ Honest scope. These are designed for but not implemented:
   The pipeline object is already shared-ready; the queue is not wired.
 - **Webhooks** — delivery, retries and backoff. The HMAC signing primitive
   exists and is tested; nothing sends yet.
-- **Dashboard and playground** — the Next.js frontend.
 - **Python SDK.**
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.

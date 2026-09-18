@@ -1,0 +1,193 @@
+/** Mirrors the API response shapes. Kept hand-written and small on purpose. */
+
+export interface ApiError {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface Envelope<T> {
+  success: boolean;
+  request_id: string;
+  data: T;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: string;
+  created_at: string;
+  organization: Organization;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in_seconds: number;
+  user: UserProfile;
+}
+
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  environment: string;
+  masked_key: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  expires_at: string | null;
+  active: boolean;
+}
+
+export interface CreatedApiKey extends ApiKeySummary {
+  /** Returned exactly once, at creation. Not recoverable afterwards. */
+  key: string;
+}
+
+export interface DocumentSummary {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  page_count: number;
+  document_type: string;
+  status: string;
+  request_id: string | null;
+  stored: boolean;
+  retention_expires_at: string | null;
+  purged_at: string | null;
+  created_at: string;
+}
+
+export type CheckStatus = "passed" | "warning" | "failed" | "not_checked";
+
+export interface ValidationCheck {
+  name: string;
+  status: CheckStatus;
+  message?: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export interface ValidationSummary {
+  overall: CheckStatus;
+  checks: ValidationCheck[];
+  gstin_format_valid: boolean | null;
+  calculation_matches: boolean | null;
+  required_fields_present: boolean | null;
+}
+
+export type ConfidenceBand = "high" | "medium" | "low";
+
+export interface FieldConfidence {
+  confidence: number;
+  band: ConfidenceBand;
+  page?: number;
+  source_text?: string;
+}
+
+export interface ConfidenceSummary {
+  overall: number | null;
+  band: ConfidenceBand | null;
+  fields: Record<string, FieldConfidence>;
+  low_confidence_fields: string[];
+}
+
+export interface ProcessingSummary {
+  duration_ms: number;
+  pages: number;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  provider_latency_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  estimated_cost_usd: number | null;
+}
+
+export interface ExtractionResponse {
+  success: true;
+  request_id: string;
+  document_id: string;
+  extraction_id: string;
+  data: Record<string, unknown>;
+  confidence: ConfidenceSummary;
+  validation: ValidationSummary;
+  processing: ProcessingSummary;
+}
+
+export interface StoredExtraction {
+  id: string;
+  document_id: string;
+  request_id: string | null;
+  status: string;
+  document_type: string;
+  data: Record<string, unknown> | null;
+  confidence: Record<string, FieldConfidence> | null;
+  overall_confidence: number | null;
+  validation: { overall: CheckStatus; checks: ValidationCheck[] } | null;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  estimated_cost_usd: number | null;
+  provider_latency_ms: number | null;
+  total_latency_ms: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface DailyPoint {
+  day: string;
+  requests: number;
+  successful: number;
+  failed: number;
+  documents: number;
+}
+
+export interface UsageSummary {
+  window_days: number;
+  totals: {
+    requests: number;
+    successful_requests: number;
+    failed_requests: number;
+    pages: number;
+    average_duration_ms: number | null;
+    estimated_cost_usd: number;
+  };
+  quota: {
+    documents_used: number;
+    monthly_quota: number;
+    remaining: number;
+    percent_used: number;
+    period_start: string;
+    rate_limit_per_minute: number;
+  };
+  daily: DailyPoint[];
+  success_rate: number | null;
+}
+
+export interface UsageEvent {
+  id: string;
+  request_id: string | null;
+  endpoint: string;
+  event_type: string;
+  status_code: number;
+  success: boolean;
+  billable: boolean;
+  pages: number;
+  model: string | null;
+  duration_ms: number | null;
+  estimated_cost_usd: number | null;
+  error_code: string | null;
+  document_id: string | null;
+  created_at: string;
+}
