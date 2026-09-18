@@ -108,6 +108,19 @@ curl -X POST http://localhost:8000/v1/invoices/extract \
   -F "file=@invoice.pdf"
 ```
 
+Or from Python, with the client in [`clients/python`](clients/python):
+
+```python
+from docuparse import DocuParse
+
+client = DocuParse()                   # DOCUPARSE_API_KEY, DOCUPARSE_BASE_URL
+result = client.extract("invoice.pdf")
+
+print(result.data.invoice_number)      # 'INV-2025-0042'
+print(result.data.total)               # Decimal('118000.00')
+print(result.validation.overall)       # 'passed'
+```
+
 ### 6. Run the dashboard
 
 ```bash
@@ -123,6 +136,7 @@ confidence and a copy-pasteable cURL command.
 
 ```bash
 make test           # 326 backend tests, no services required
+make test-sdk       # 51 Python client tests, no services required
 make lint
 make test-web       # typecheck + browser smoke check (needs both servers up)
 ```
@@ -337,6 +351,57 @@ replayed from the browser) and needs to read the same data.
 `/v1/invoices/extract` also accepts a session, so the playground can run a real
 extraction. Those runs are tagged `dashboard_request` in the usage log and cost
 and count exactly like an API call — the playground does not get a free path.
+
+---
+
+## Python client
+
+`clients/python` is a small, dependency-light client (`httpx` only). It is
+published from this repository and versioned with it.
+
+```bash
+pip install docuparse
+```
+
+```python
+from docuparse import DocuParse, QuotaExceeded
+
+client = DocuParse()                            # DOCUPARSE_API_KEY
+
+receipt = client.batches.create("~/invoices/september", name="September")
+for bad in receipt.rejected:                    # read this list
+    print(bad.filename, bad.code, bad.message)
+
+batch = client.batches.wait(receipt.batch_id)
+client.exports.invoices("september.csv", batch_id=batch.id)
+```
+
+Three decisions in it are worth repeating here, because they are the same
+decisions the API makes and the client would undo them if it were careless:
+
+- **Amounts are `Decimal`, never `float`.** JSON numbers are parsed straight
+  into `Decimal`, so `118000.60` does not arrive as `118000.59999999999`. This
+  is why the transport parses the body itself instead of calling
+  `response.json()`.
+- **A missing field is `None` and stays `None`** — not zero, not today's date.
+  `result.needs_review()` folds the validation verdict and the confidence floor
+  into the one question a bookkeeper actually asks.
+- **A `POST` is retried only on `429`.** A network failure or a `5xx` on a
+  submission might mean the server already processed it, and repeating that
+  would extract, bill and count the same invoice twice. `429` is the one status
+  that proves the request did not run. `GET`s retry freely. Until the API
+  offers idempotency keys, an error the caller can decide about beats a silent
+  double charge.
+
+Every model keeps the server's response on `.raw`, so a field added to the API
+tomorrow is readable without upgrading the package.
+
+51 tests cover it, driving the real client through `httpx.MockTransport` so
+what is under test is the request the library actually builds. Full reference:
+[`clients/python/README.md`](clients/python/README.md).
+
+Not built: an async client, webhook helpers in the package, and a JavaScript
+SDK. `fetch` against the documented endpoints is the JavaScript path for now.
 
 ---
 
@@ -647,11 +712,16 @@ free of gradients and animation.
 | `/usage` | 7/30/90-day totals and the full request log, with the estimated provider cost per request. |
 | `/api-keys` | Create, rotate and revoke. The secret is shown once, at creation. |
 | `/webhooks` | Register endpoints, rotate secrets, enable or disable, and read the delivery log. |
-| `/docs` | Quickstart, cURL/Python/JavaScript examples, the error table, and what is not built yet. |
+| `/docs` | **Public** — the API reference, readable without an account: the SDK quickstart, cURL/Python/JavaScript examples, the error table, and what is not built yet. |
 | `/settings` | The organization, the account, and which API the dashboard is pointed at. |
 
 There is no `/billing` page, because billing does not work yet. Listing it as a
 greyed-out menu item would make the dashboard look more finished than it is.
+
+`/docs` sits outside the authentication gate, in the `(public)` route group. It
+is what a developer reads *before* deciding to sign up, so putting it behind a
+login would hide it from the people it is written for. Same page, same URL,
+signed in or out — the header offers the dashboard or an account accordingly.
 
 ### The chart is not decorative
 
@@ -665,6 +735,12 @@ rather than drawing two distant days as neighbours.
 ## Architecture
 
 A modular monolith. One FastAPI application, strict internal seams.
+
+```
+backend/          the API, the worker and the migrations
+frontend/         the dashboard, and the public API reference at /docs
+clients/python/   the Python client, published as `docuparse`
+```
 
 ```
 backend/app/
@@ -810,6 +886,9 @@ make revision m="add webhooks"
 make run        # uvicorn with reload
 make test       # pytest — needs no services
 make lint       # ruff
+make setup-sdk  # editable install of the Python client
+make test-sdk   # the client's tests
+make lint-sdk   # ruff check + format check
 make setup-web  # npm install for the dashboard
 make worker     # async jobs + webhook delivery
 make web        # the dashboard on :3000
@@ -835,6 +914,12 @@ retries and backoff, the SSRF guard on webhook destinations, QR and text-layer
 extraction, tier routing and escalation, cross-source conflict reporting,
 bulk-upload partial acceptance, and CSV export escaping and null handling.
 
+51 client tests cover the Python SDK — response parsing, decimal exactness,
+the error hierarchy, the asymmetric retry policy, batch and directory upload,
+and atomic CSV download — driving the real client through
+`httpx.MockTransport`, so what is under test is the request the library
+actually builds.
+
 The dashboard is checked by `frontend/scripts/smoke.mjs`, which drives a real
 browser against a running stack (`npx playwright install chromium` once, then
 `make test-web` with both servers up): it signs in, asserts every page renders live
@@ -854,9 +939,11 @@ repository.
 
 Honest scope. These are designed for but not implemented:
 
-- **Python SDK.**
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.
+- **Deployment** — there is no Dockerfile and no hosted endpoint. The stack
+  runs from `make`, on one machine.
+- **An async Python client**, webhook helpers in the SDK, and a JavaScript SDK.
 - **Evaluation harness** — the synthetic corpus generator exists in
   `tests/fixtures/`; field-level accuracy scoring does not.
 

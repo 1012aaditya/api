@@ -10,6 +10,10 @@ venv/
 .coverage
 htmlcov/
 
+# Python packaging artifacts (clients/python)
+build/
+dist/
+
 # Environment / secrets — never commit real values
 .env
 .env.*

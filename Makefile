@@ -2,11 +2,12 @@
 
 BACKEND  := backend
 FRONTEND := frontend
+SDK      := clients/python
 PY       := $(BACKEND)/.venv/bin/python
 PIP      := $(BACKEND)/.venv/bin/pip
 
-.PHONY: help setup setup-web up down migrate revision run worker web build-web \
-	test test-web lint lint-web purge clean
+.PHONY: help setup setup-sdk setup-web up down migrate revision run worker web \
+	build-web test test-sdk test-web lint lint-sdk lint-web purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -50,12 +51,22 @@ build-web: ## Production build of the dashboard
 test: ## Run the backend test suite (needs no services)
 	cd $(BACKEND) && .venv/bin/python -m pytest -q
 
+setup-sdk: ## Install the Python client in editable mode, with dev extras
+	$(PIP) install -e "$(SDK)[dev]"
+
+test-sdk: ## Run the Python client's test suite (needs no services)
+	# PYTHONPATH rather than an install, so this works straight after `make setup`.
+	cd $(SDK) && PYTHONPATH=src ../../$(PY) -m pytest -q
+
 test-web: ## Typecheck the dashboard, then smoke-test it in a real browser
 	cd $(FRONTEND) && npm run typecheck
 	cd $(FRONTEND) && npm run smoke
 
 lint: ## Lint the backend
 	cd $(BACKEND) && .venv/bin/ruff check .
+
+lint-sdk: ## Lint the Python client
+	cd $(SDK) && ../../$(BACKEND)/.venv/bin/ruff check . && ../../$(BACKEND)/.venv/bin/ruff format --check .
 
 lint-web: ## Typecheck the dashboard
 	cd $(FRONTEND) && npm run typecheck
@@ -69,3 +80,4 @@ purge: ## Delete documents past their retention window
 clean: ## Remove caches
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 	rm -rf $(BACKEND)/.pytest_cache $(BACKEND)/.ruff_cache $(FRONTEND)/.next
+	rm -rf $(SDK)/.pytest_cache $(SDK)/build $(SDK)/dist

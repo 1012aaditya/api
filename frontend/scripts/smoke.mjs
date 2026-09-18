@@ -119,6 +119,25 @@ try {
     !/whsec_[a-f0-9]{40,}/.test(await page.content()),
   );
 
+  // The API reference is what a developer reads before deciding to sign up, so
+  // it must render for someone who has no account at all. A fresh context is
+  // the only way to assert that — the page above is signed in.
+  console.log("public docs");
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage({ viewport: { width: 1440, height: 1000 } });
+  await anonPage.goto(`${APP}/docs`, { waitUntil: "networkidle" });
+  await anonPage.waitForTimeout(800);
+  check("/docs renders signed out", anonPage.url().endsWith("/docs"), anonPage.url());
+  check(
+    "/docs documents the SDK",
+    await anonPage.getByText("pip install docuparse").first().isVisible(),
+  );
+  check(
+    "signed-out header offers an account",
+    await anonPage.getByRole("link", { name: "Create account" }).isVisible(),
+  );
+  await anon.close();
+
   check("no uncaught page errors", consoleErrors.length === 0, consoleErrors.join(" | "));
 } finally {
   await browser.close();

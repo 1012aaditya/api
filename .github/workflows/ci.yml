@@ -38,6 +38,34 @@ jobs:
           alembic upgrade head
           alembic check
 
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "clients/python[dev]"
+
+      - name: Lint
+        working-directory: clients/python
+        run: |
+          ruff check .
+          ruff format --check .
+
+      # The client's tests drive it through httpx.MockTransport, so they need
+      # neither a running API nor credentials. 3.9 is the oldest version the
+      # package claims to support, so that is what CI proves.
+      - name: Test
+        working-directory: clients/python
+        run: python -m pytest -q
+
   frontend:
     runs-on: ubuntu-latest
     steps:

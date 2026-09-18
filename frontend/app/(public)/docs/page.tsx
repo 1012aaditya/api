@@ -44,6 +44,78 @@ export default function DocsPage() {
 
         <Card>
           <CardHeader
+            title="Python SDK"
+            description="pip install docuparse — the shortest path from a folder of PDFs to a spreadsheet"
+          />
+          <div className="space-y-4 p-5">
+            <CopyableCommand command={`pip install docuparse`} />
+            <CopyableCommand
+              command={[
+                `from docuparse import DocuParse`,
+                ``,
+                `client = DocuParse()               # reads DOCUPARSE_API_KEY`,
+                `result = client.extract("invoice.pdf")`,
+                ``,
+                `print(result.data.invoice_number)  # 'INV-2025-0042'`,
+                `print(result.data.total)           # Decimal('118000.00')`,
+                `print(result.validation.overall)   # 'passed'`,
+                ``,
+                `if result.needs_review():`,
+                `    print(result.confidence.low_confidence_fields)`,
+              ].join("\n")}
+            />
+            <p className="text-sm text-ink-2">
+              A whole folder, then the results as a spreadsheet:
+            </p>
+            <CopyableCommand
+              command={[
+                `receipt = client.batches.create("~/invoices/september")`,
+                ``,
+                `for bad in receipt.rejected:       # read this list`,
+                `    print(bad.filename, bad.code)`,
+                ``,
+                `batch = client.batches.wait(receipt.batch_id)`,
+                `client.exports.invoices("september.csv", batch_id=batch.id)`,
+              ].join("\n")}
+            />
+            <ul className="space-y-1.5 text-sm text-ink-2">
+              <li>
+                Amounts come back as{" "}
+                <code className="font-mono text-xs text-ink">Decimal</code>, never{" "}
+                <code className="font-mono text-xs text-ink">float</code>, so{" "}
+                <code className="font-mono text-xs">118000.60</code> does not become{" "}
+                <code className="font-mono text-xs">118000.59999999999</code> on its
+                way into your ledger.
+              </li>
+              <li>
+                A field that was not on the document is{" "}
+                <code className="font-mono text-xs text-ink">None</code> and stays{" "}
+                <code className="font-mono text-xs text-ink">None</code>. The
+                library never substitutes a zero or today&apos;s date.
+              </li>
+              <li>
+                Every exception carries{" "}
+                <code className="font-mono text-xs">code</code>,{" "}
+                <code className="font-mono text-xs">status_code</code> and{" "}
+                <code className="font-mono text-xs">request_id</code>.
+              </li>
+              <li>
+                A <code className="font-mono text-xs">POST</code> is retried only on{" "}
+                <code className="font-mono text-xs">429</code> — the one status that
+                proves the request did not run. Retrying a submission that may
+                already have been processed would extract, bill and count the same
+                invoice twice.
+              </li>
+            </ul>
+            <p className="text-xs text-muted">
+              Synchronous only for now; there is no async client and no webhook
+              helper in the package yet.
+            </p>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
             title="Extract an invoice"
             description="POST /v1/invoices/extract · multipart/form-data"
           />
@@ -447,8 +519,9 @@ export default function DocsPage() {
         <Card>
           <CardHeader title="Not available yet" />
           <ul className="space-y-2 p-5 text-sm text-ink-2">
-            <li>The Python SDK</li>
             <li>Billing and subscriptions</li>
+            <li>An async Python client, and webhook helpers in the SDK</li>
+            <li>A JavaScript SDK — use <code className="font-mono text-xs">fetch</code> for now</li>
           </ul>
           <p className="border-t border-line px-5 py-3 text-xs text-muted">
             Listed here rather than shown as greyed-out menu items, so nothing in
