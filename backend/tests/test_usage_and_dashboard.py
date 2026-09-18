@@ -267,3 +267,18 @@ async def test_the_daily_series_covers_every_day_in_the_window(
     with_traffic = [p for p in data["daily"] if p["requests"] > 0]
     assert len(with_traffic) == 1
     assert sum(p["requests"] for p in data["daily"]) == 1
+
+
+async def test_a_stored_extraction_records_its_prompt_version(
+    client: httpx.AsyncClient, tenant: Tenant, use_provider, stub_provider: StubProvider
+) -> None:
+    """A prompt change is a behaviour change; it has to be attributable (§33)."""
+    use_provider(stub_provider)
+    body = (await _extract(client, tenant.headers)).json()
+    stored = (
+        await client.get(
+            f"/v1/documents/{body['document_id']}/extraction", headers=tenant.headers
+        )
+    ).json()["data"]
+    assert stored["prompt_version"] == "gst_invoice.v1"
+    assert stored["prompt_version"] == body["processing"]["prompt_version"]

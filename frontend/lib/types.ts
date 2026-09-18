@@ -135,6 +135,7 @@ export interface StoredExtraction {
   validation: { overall: CheckStatus; checks: ValidationCheck[] } | null;
   provider: string | null;
   model: string | null;
+  prompt_version: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
   estimated_cost_usd: number | null;
@@ -190,4 +191,68 @@ export interface UsageEvent {
   error_code: string | null;
   document_id: string | null;
   created_at: string;
+}
+
+export type JobState = "queued" | "processing" | "completed" | "failed";
+
+export interface JobAccepted {
+  success: true;
+  request_id: string;
+  job_id: string;
+  document_id: string;
+  status: JobState;
+}
+
+export interface JobStatus {
+  id: string;
+  status: JobState;
+  document_id: string;
+  document_type: string;
+  request_id: string | null;
+  extraction_id: string | null;
+  attempts: number;
+  max_attempts: number;
+  error: { code: string; message: string } | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export type WebhookEventName =
+  | "document.processing"
+  | "document.completed"
+  | "document.failed";
+
+export interface WebhookSummary {
+  id: string;
+  url: string;
+  description: string | null;
+  events: string[];
+  is_active: boolean;
+  consecutive_failures: number;
+  last_delivery_at: string | null;
+  disabled_at: string | null;
+  created_at: string;
+}
+
+export interface CreatedWebhook extends WebhookSummary {
+  /** Derived, not stored. Returned once, at creation or rotation. */
+  secret: string;
+}
+
+export interface DeliverySummary {
+  id: string;
+  webhook_id: string;
+  event: string;
+  status: "pending" | "delivered" | "failed";
+  job_id: string | null;
+  document_id: string | null;
+  attempts: number;
+  max_attempts: number;
+  response_status: number | null;
+  error: string | null;
+  next_attempt_at: string;
+  delivered_at: string | null;
+  created_at: string;
+  payload: Record<string, unknown>;
 }

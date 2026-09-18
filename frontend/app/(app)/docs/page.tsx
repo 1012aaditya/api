@@ -211,13 +211,130 @@ export default function DocsPage() {
         </Card>
 
         <Card>
+          <CardHeader
+            title="Asynchronous processing"
+            description="POST /v1/documents — for large or multi-page documents"
+          />
+          <div className="space-y-4 p-5">
+            <p className="text-sm text-ink-2">
+              Returns as soon as the upload is stored, so a slow extraction does
+              not hold an HTTP connection open. Poll the job, or register a
+              webhook and skip the polling entirely.
+            </p>
+            <CopyableCommand
+              command={[
+                `curl -X POST ${API_URL}/v1/documents \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx" \\`,
+                `  -F "file=@invoice.pdf"`,
+                ``,
+                `# → {"success":true,"job_id":"job_01M2...","document_id":"doc_01M2...",`,
+                `#    "status":"queued"}`,
+                ``,
+                `curl ${API_URL}/v1/jobs/job_01M2... \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx"`,
+                ``,
+                `# status is queued | processing | completed | failed.`,
+                `# Once completed, read the result:`,
+                `curl ${API_URL}/v1/documents/doc_01M2.../extraction \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx"`,
+              ].join("\n")}
+            />
+            <p className="text-xs text-muted">
+              A job that fails because the provider was briefly unreachable is
+              retried with backoff. A document the model could not parse is not
+              — the same bytes and the same prompt produce the same answer, so a
+              retry would only cost you money.
+            </p>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Webhooks"
+            description="Be told when a document finishes, instead of polling"
+          />
+          <div className="space-y-4 p-5">
+            <p className="text-sm text-ink-2">
+              Register an endpoint on the{" "}
+              <Link href="/webhooks" className="text-accent underline underline-offset-2">
+                Webhooks
+              </Link>{" "}
+              page. We POST a signed JSON body for{" "}
+              <code className="font-mono text-xs">document.processing</code>,{" "}
+              <code className="font-mono text-xs">document.completed</code> and{" "}
+              <code className="font-mono text-xs">document.failed</code>.
+            </p>
+            <CopyableCommand
+              command={JSON.stringify(
+                {
+                  id: "whd_01M2...",
+                  event: "document.completed",
+                  job_id: "job_01M2...",
+                  document_id: "doc_01M2...",
+                  extraction_id: "ext_01M2...",
+                  status: "completed",
+                  validation: { overall: "passed" },
+                  occurred_at: "2026-09-18T19:54:36.919878+00:00",
+                },
+                null,
+                2,
+              )}
+            />
+            <p className="text-sm text-ink-2">
+              <strong className="text-ink">Verify every delivery</strong> before
+              trusting it. The{" "}
+              <code className="font-mono text-xs">X-DocuParse-Signature</code>{" "}
+              header is <code className="font-mono text-xs">t=&lt;unix&gt;,v1=&lt;hmac&gt;</code>,
+              where the HMAC-SHA256 is computed over{" "}
+              <code className="font-mono text-xs">&quot;&lt;t&gt;.&quot; + raw request body</code>{" "}
+              with your endpoint&apos;s secret.
+            </p>
+            <CopyableCommand
+              command={[
+                `# Python — verify a delivery`,
+                `import hashlib, hmac, time`,
+                ``,
+                `def verify(body: bytes, header: str, secret: str) -> bool:`,
+                `    parts = dict(p.split("=", 1) for p in header.split(","))`,
+                `    issued_at, received = int(parts["t"]), parts["v1"]`,
+                `    if abs(time.time() - issued_at) > 300:`,
+                `        return False  # too old — reject the replay`,
+                `    expected = hmac.new(`,
+                `        secret.encode(), f"{issued_at}.".encode() + body, hashlib.sha256`,
+                `    ).hexdigest()`,
+                `    return hmac.compare_digest(expected, received)`,
+              ].join("\n")}
+            />
+            <ul className="space-y-1.5 text-sm text-ink-2">
+              <li>
+                Reply <code className="font-mono text-xs">2xx</code> as soon as you
+                have stored the event. Do the work afterwards.
+              </li>
+              <li>
+                A <code className="font-mono text-xs">5xx</code>, a timeout or a
+                refused connection is retried with exponential backoff: 30s, 1m,
+                2m, 4m, and so on. A <code className="font-mono text-xs">4xx</code>{" "}
+                is not — that means you understood and refused.
+              </li>
+              <li>
+                Deliveries carry a stable <code className="font-mono text-xs">id</code>.
+                Use it to recognise a retry rather than double-posting.
+              </li>
+              <li>
+                An endpoint that fails repeatedly is disabled, and we stop calling
+                it until you re-enable it.
+              </li>
+              <li>
+                Endpoints must be https and publicly reachable. Private, loopback
+                and link-local addresses are refused.
+              </li>
+            </ul>
+          </div>
+        </Card>
+
+        <Card>
           <CardHeader title="Not available yet" />
           <ul className="space-y-2 p-5 text-sm text-ink-2">
-            <li>
-              Asynchronous processing (<code className="font-mono text-xs">POST /v1/documents</code>,{" "}
-              <code className="font-mono text-xs">GET /v1/jobs/&#123;id&#125;</code>)
-            </li>
-            <li>Webhooks</li>
             <li>The Python SDK</li>
             <li>Billing and subscriptions</li>
           </ul>

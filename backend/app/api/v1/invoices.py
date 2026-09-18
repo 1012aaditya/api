@@ -6,15 +6,14 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, enforce_document_quota, get_request_id
-from app.core.errors import DocuParseError, FileTooLargeError, InvalidRequestError
+from app.api.v1.uploads import read_upload
+from app.core.errors import DocuParseError, InvalidRequestError
 from app.db.session import get_db
 from app.schemas.common import ErrorResponse
 from app.schemas.extraction import ExtractionResponse
 from app.services.extraction_service import ExtractionService, UploadedFile
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
-
-_CHUNK = 1024 * 1024
 
 _ERROR_RESPONSES: dict[int | str, dict] = {
     400: {"model": ErrorResponse, "description": "The file could not be read."},
@@ -26,23 +25,6 @@ _ERROR_RESPONSES: dict[int | str, dict] = {
     429: {"model": ErrorResponse, "description": "Rate limit exceeded."},
     503: {"model": ErrorResponse, "description": "No extraction provider is available."},
 }
-
-
-async def _read_upload(upload: UploadFile, *, max_size_bytes: int) -> bytes:
-    """Read the body in chunks and stop the moment it exceeds the limit.
-
-    Reading first and measuring afterwards would let anyone with a valid key
-    push an arbitrarily large body into this process's memory.
-    """
-    buffer = bytearray()
-    while chunk := await upload.read(_CHUNK):
-        buffer.extend(chunk)
-        if len(buffer) > max_size_bytes:
-            raise FileTooLargeError(
-                f"File exceeds the maximum size of {max_size_bytes} bytes.",
-                details={"max_size_bytes": max_size_bytes},
-            )
-    return bytes(buffer)
 
 
 @router.post(
@@ -68,7 +50,7 @@ async def extract_invoice(
 
     service = ExtractionService(db)
     try:
-        content = await _read_upload(
+        content = await read_upload(
             file, max_size_bytes=auth.settings.max_file_size_bytes
         )
     except DocuParseError as exc:

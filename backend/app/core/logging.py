@@ -80,3 +80,10 @@ def configure_logging(level: str = "INFO", *, json_output: bool = True) -> None:
 
 def get_logger(name: str = "docuparse") -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
+
+
+# structlog's bound logger takes the log message as a positional parameter
+# named ``event``, so a context key called ``event`` collides with it and
+# raises at the call site. Anything domain-specific gets a qualified name
+# (``webhook_event``, ``event_type``) instead.
+RESERVED_LOG_KEYS = frozenset({"event"})

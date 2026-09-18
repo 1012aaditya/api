@@ -61,8 +61,25 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
 
-    # --- Webhooks ---
+    # --- Webhooks (§22) ---
+    # Per-endpoint signing secrets are derived from this, so no webhook secret
+    # is ever stored. Unset means webhooks cannot be created.
     webhook_secret: str | None = None
+    webhook_max_attempts: int = 5
+    webhook_timeout_seconds: float = 10.0
+    # Consecutive failures before an endpoint is disabled and we stop calling it.
+    webhook_failure_threshold: int = 20
+    # Customer-supplied URLs are an SSRF vector. Off in production, always.
+    webhook_allow_private_urls: bool = False
+    webhook_require_https: bool = True
+
+    # --- Async jobs (§6) ---
+    job_max_attempts: int = 3
+    worker_poll_interval_seconds: float = 2.0
+    worker_batch_size: int = 5
+    # A job claimed but never finished (worker killed mid-run) is returned to
+    # the queue after this long.
+    job_stale_after_seconds: int = 900
 
     # --- Upload limits ---
     max_file_size_bytes: int = 20 * 1024 * 1024
@@ -91,6 +108,16 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def webhooks_configured(self) -> bool:
+        """Whether webhook endpoints can be created and signed.
+
+        Without a master secret there is nothing to derive signing keys from,
+        and an unsigned webhook is worse than none — the receiver has no way
+        to tell our call from anyone else's.
+        """
+        return bool(self.webhook_secret)
 
     @property
     def provider_configured(self) -> bool:

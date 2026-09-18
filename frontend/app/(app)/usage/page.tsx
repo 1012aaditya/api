@@ -169,7 +169,10 @@ export default function UsagePage() {
                     {events.map((event) => (
                       <tr key={event.id}>
                         <td className="px-5 py-2.5">
-                          <StatusBadge status={event.success ? "passed" : "failed"} />
+                          <StatusBadge
+                        status={event.success ? "passed" : "failed"}
+                        label={event.success ? "Succeeded" : "Failed"}
+                      />
                         </td>
                         <td className="px-3 py-2.5 font-mono text-xs text-ink-2">
                           {event.endpoint}

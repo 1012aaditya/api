@@ -97,3 +97,32 @@ def test_requesting_an_unregistered_document_type_is_refused() -> None:
 
     with pytest.raises(InvalidRequestError):
         get_strategy("bank_statement")
+
+
+def test_no_log_call_uses_the_reserved_event_key() -> None:
+    """``event`` is structlog's own positional parameter.
+
+    Passing it as a context kwarg raises TypeError at the call site — which
+    means the bug only shows up when that particular line runs. This catches
+    it at import time instead.
+    """
+    import ast
+    import pathlib
+
+    from app.core.logging import RESERVED_LOG_KEYS
+
+    offenders: list[str] = []
+    for path in pathlib.Path("app").rglob("*.py"):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"debug", "info", "warning", "error", "exception"}:
+                continue
+            target = node.func.value
+            if not (isinstance(target, ast.Name) and target.id == "logger"):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg in RESERVED_LOG_KEYS:
+                    offenders.append(f"{path}:{node.lineno} passes {keyword.arg}=")
+    assert offenders == [], offenders

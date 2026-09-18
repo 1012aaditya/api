@@ -92,6 +92,7 @@ try {
     ["/documents", "Uploads"],
     ["/usage", "Request log"],
     ["/api-keys", "Create a key"],
+    ["/webhooks", "Add an endpoint"],
     ["/docs", "Authenticate"],
     ["/settings", "Organization"],
   ]) {
@@ -108,6 +109,13 @@ try {
   check(
     "no full API key is rendered in the key list",
     !/dp_live_[A-Za-z0-9_-]{30,}/.test(body),
+  );
+
+  await page.goto(`${APP}/webhooks`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(600);
+  check(
+    "no webhook signing secret is rendered in the endpoint list",
+    !/whsec_[a-f0-9]{40,}/.test(await page.content()),
   );
 
   check("no uncaught page errors", consoleErrors.length === 0, consoleErrors.join(" | "));

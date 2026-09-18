@@ -9,19 +9,27 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthContext, enforce_rate_limit, get_request_id
-from app.core.errors import NotFoundError
+from app.api.deps import (
+    AuthContext,
+    enforce_document_quota,
+    enforce_rate_limit,
+    get_request_id,
+)
+from app.api.v1.uploads import read_upload
+from app.core.errors import DocuParseError, InvalidRequestError, NotFoundError
 from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.models import Document, DocumentStatus
 from app.repositories.documents import DocumentRepository
 from app.repositories.extractions import ExtractionRepository
-from app.schemas.common import SuccessResponse
+from app.schemas.common import ErrorResponse, SuccessResponse
+from app.schemas.jobs import JobAccepted
+from app.services.extraction_service import ExtractionService, UploadedFile
 from app.services.storage import get_object_store
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -57,6 +65,60 @@ def _summary(document: Document) -> DocumentSummary:
         retention_expires_at=document.retention_expires_at,
         purged_at=document.purged_at,
         created_at=document.created_at,
+    )
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobAccepted,
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        413: {"model": ErrorResponse},
+        415: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+    summary="Submit a document for asynchronous extraction",
+    description=(
+        "Accepts the upload and returns immediately with a job id. Poll "
+        "`GET /v1/jobs/{job_id}`, or register a webhook and be told. Use this "
+        "rather than `/v1/invoices/extract` for large or multi-page documents, "
+        "so a slow extraction does not hold an HTTP connection open."
+    ),
+)
+async def submit_document(
+    file: UploadFile = File(..., description="The document: PDF, PNG, JPG or JPEG."),
+    auth: AuthContext = Depends(enforce_document_quota),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> JobAccepted:
+    if file is None or not file.filename:
+        raise InvalidRequestError("No file was provided in the 'file' form field.")
+
+    service = ExtractionService(db)
+    try:
+        content = await read_upload(
+            file, max_size_bytes=auth.settings.max_file_size_bytes
+        )
+    except DocuParseError as exc:
+        await service.record_rejected_request(
+            auth=auth, request_id=request_id, error=exc, endpoint="/v1/documents"
+        )
+        raise
+
+    job = await service.submit_document(
+        auth=auth,
+        upload=UploadedFile(content=content, filename=file.filename),
+        request_id=request_id,
+    )
+    return JobAccepted(
+        request_id=request_id,
+        job_id=job.id,
+        document_id=job.document_id,
+        status=job.status,  # type: ignore[arg-type]
     )
 
 
@@ -138,6 +200,7 @@ class StoredExtraction(BaseModel):
     validation: dict | None
     provider: str | None
     model: str | None
+    prompt_version: str | None
     input_tokens: int | None
     output_tokens: int | None
     estimated_cost_usd: float | None
@@ -188,6 +251,7 @@ async def get_document_extraction(
             ),
             provider=extraction.provider,
             model=extraction.model,
+            prompt_version=extraction.prompt_version,
             input_tokens=extraction.input_tokens,
             output_tokens=extraction.output_tokens,
             estimated_cost_usd=float(extraction.estimated_cost_usd)

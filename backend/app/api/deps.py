@@ -41,7 +41,7 @@ class AuthContext:
     organization: Organization
     settings: Settings
     api_key: APIKey | None = None
-    actor: Literal["api_key", "session"] = "api_key"
+    actor: Literal["api_key", "session", "worker"] = "api_key"
     user: User | None = None
 
     @property
@@ -54,8 +54,12 @@ class AuthContext:
 
     @property
     def usage_event_type(self) -> str:
-        """Distinguishes dashboard-driven work from real API traffic (§21)."""
-        return "api_request" if self.actor == "api_key" else "dashboard_request"
+        """Distinguishes API traffic, dashboard runs and worker jobs (§21)."""
+        return {
+            "api_key": "api_request",
+            "session": "dashboard_request",
+            "worker": "async_job",
+        }[self.actor]
 
     @property
     def rate_limit_per_minute(self) -> int:

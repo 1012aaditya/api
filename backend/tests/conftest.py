@@ -44,6 +44,13 @@ os.environ.update(
         "DEFAULT_MONTHLY_DOCUMENT_QUOTA": "100",
         "DOCUMENT_RETENTION_DAYS": "7",
         "ROUNDING_TOLERANCE": "1.0",
+        "WEBHOOK_SECRET": "test-master-webhook-secret",
+        # Strict on purpose: the SSRF guard is under test, not bypassed.
+        "WEBHOOK_ALLOW_PRIVATE_URLS": "false",
+        "WEBHOOK_REQUIRE_HTTPS": "true",
+        "WEBHOOK_MAX_ATTEMPTS": "3",
+        "JOB_MAX_ATTEMPTS": "3",
+        "WORKER_BATCH_SIZE": "5",
     }
 )
 
@@ -307,3 +314,43 @@ def use_provider(app):
 
     yield _install
     set_provider(None)
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    """Make any hostname resolve to a public address.
+
+    Keeps DNS out of the test suite while still running the real destination
+    check — the guard's logic is exercised, only the lookup is stubbed. Tests
+    that assert the guard *blocks* something use literal IPs, which never hit
+    this.
+    """
+    import app.services.webhook_security as security
+
+    monkeypatch.setattr(security, "_resolve", lambda host, port: ["93.184.216.34"])
+    return "https://receiver.example.com/docuparse"
+
+
+@pytest.fixture
+def webhook_transport():
+    """A scripted HTTP receiver, plus the requests it saw."""
+    received: list[dict[str, Any]] = []
+    responses: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(
+            {
+                "url": str(request.url),
+                "body": request.content,
+                "headers": dict(request.headers),
+            }
+        )
+        status = responses.pop(0) if responses else 200
+        if status == 0:
+            raise httpx.ConnectError("refused")
+        return httpx.Response(status)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client.received = received  # type: ignore[attr-defined]
+    client.script = responses  # type: ignore[attr-defined]
+    return client

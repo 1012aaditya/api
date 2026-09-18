@@ -140,7 +140,10 @@ export async function apiDelete<T>(path: string): Promise<T> {
   return ((await call(path, { method: "DELETE" })) as Envelope<T>).data;
 }
 
-/** The extraction endpoint returns its result at the top level, not under `data`. */
+/**
+ * Upload endpoints return their result at the top level, not under `data` —
+ * both `/v1/invoices/extract` and `/v1/documents`.
+ */
 export async function apiUpload<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append("file", file);

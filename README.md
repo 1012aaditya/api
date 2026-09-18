@@ -15,9 +15,9 @@ vision extraction, normalization, schema validation, **business validation**
 and confidence scoring, and it reports every one of those separately. The
 value is in knowing which fields you can trust.
 
-> **Status: MVP.** The API (phases 1–10) and the developer dashboard with its
-> API playground (phases 13–14) are built and working. Async jobs, webhooks and
-> the Python SDK are not — see
+> **Status: MVP.** The synchronous API, asynchronous jobs, webhooks, and the
+> developer dashboard with its API playground are built and working. The Python
+> SDK and billing are not — see
 > [What is not built yet](#what-is-not-built-yet).
 
 ---
@@ -75,9 +75,16 @@ make migrate        # alembic upgrade head
 
 ### 4. Run
 
+Two processes: the API, and a worker for async jobs and webhook delivery.
+
 ```bash
 make run            # http://localhost:8000
+make worker         # in a second terminal
 ```
+
+The API works without a worker — `/v1/invoices/extract` is synchronous. But
+`POST /v1/documents` will queue jobs that nobody picks up, and webhooks will
+never be delivered.
 
 Interactive API docs: <http://localhost:8000/docs>.
 
@@ -115,7 +122,7 @@ confidence and a copy-pasteable cURL command.
 ### 7. Run the tests
 
 ```bash
-make test           # 226 backend tests, no services required
+make test           # 282 backend tests, no services required
 make lint
 make test-web       # typecheck + browser smoke check (needs both servers up)
 ```
@@ -301,13 +308,21 @@ Consistent envelope, stable codes, no stack traces and no provider details:
 | `GET` | `/v1/api-keys` | session | List keys (masked). |
 | `DELETE` | `/v1/api-keys/{id}` | session | Revoke. |
 | `POST` | `/v1/api-keys/{id}/rotate` | session | Issue a replacement, retire the old one. |
-| `POST` | `/v1/invoices/extract` | API key | **Extract a GST invoice.** |
+| `POST` | `/v1/invoices/extract` | API key | **Extract a GST invoice, synchronously.** |
+| `POST` | `/v1/documents` | API key | **Submit for background extraction.** Returns a job id. |
+| `GET` | `/v1/jobs` · `/v1/jobs/{id}` | either | Job state: queued / processing / completed / failed. |
 | `GET` | `/v1/documents` | API key | List your documents. |
 | `GET` | `/v1/documents/{id}` | API key | One document's metadata. |
 | `DELETE` | `/v1/documents/{id}` | API key | Delete the stored bytes now. |
 | `GET` | `/v1/documents/{id}/extraction` | either | The stored result for a document. |
 | `GET` | `/v1/usage` | either | Totals, quota status, and a daily series. |
 | `GET` | `/v1/usage/events` | either | The request log, newest first. |
+| `POST` | `/v1/webhooks` | session | Register an endpoint. Secret shown once. |
+| `GET` | `/v1/webhooks` | session | List endpoints. |
+| `DELETE` | `/v1/webhooks/{id}` | session | Delete an endpoint. |
+| `POST` | `/v1/webhooks/{id}/rotate` | session | New signing secret, same endpoint. |
+| `POST` | `/v1/webhooks/{id}/enable` · `/disable` | session | Stop or resume delivery. |
+| `GET` | `/v1/webhooks/deliveries` | session | Delivery attempts, with status and retries. |
 
 API keys authenticate machine traffic; session tokens authenticate the
 dashboard. **Key management is session-only** — a leaked API key cannot mint
@@ -321,6 +336,124 @@ and count exactly like an API call — the playground does not get a free path.
 
 ---
 
+## Asynchronous processing
+
+A 25-page scan can take a while. `POST /v1/documents` stores the upload,
+queues a job and returns immediately:
+
+```bash
+curl -X POST http://localhost:8000/v1/documents \
+  -H "Authorization: Bearer dp_live_..." \
+  -F "file=@invoice.pdf"
+# → {"success":true,"job_id":"job_01M2…","document_id":"doc_01M2…","status":"queued"}
+
+curl http://localhost:8000/v1/jobs/job_01M2… -H "Authorization: Bearer dp_live_..."
+# status: queued → processing → completed | failed
+
+curl http://localhost:8000/v1/documents/doc_01M2…/extraction \
+  -H "Authorization: Bearer dp_live_..."
+```
+
+### The queue is in Postgres, not Redis
+
+At this scale that is a feature rather than a shortcut: the job row and the
+document row commit in one transaction, a stuck job is a row you can look at
+and edit, and there is no second source of truth to drift. Workers claim rows
+with `FOR UPDATE SKIP LOCKED`, so several can run at once and two racing
+workers take two different jobs. A worker killed mid-job leaves the row in
+`processing`; another worker returns it to the queue after
+`JOB_STALE_AFTER_SECONDS`.
+
+Move to Redis when a single Postgres cannot keep up with the claim rate — the
+`JobRepository` is the only thing that would change.
+
+### What is retried, and what is not
+
+A job that failed because the provider was briefly unreachable is retried with
+backoff (30s, 2m, 10m), bounded by `JOB_MAX_ATTEMPTS`. A document the model
+could not parse is **not**: the same bytes and the same prompt produce the same
+answer, so a retry would only cost money (§34). Nothing here can loop forever.
+
+A submission is not billable; the worker's attempt is. Refusing a document for
+its type or size costs nothing and is recorded but not billed.
+
+## Webhooks
+
+Register an endpoint and stop polling:
+
+```bash
+curl -X POST http://localhost:8000/v1/webhooks \
+  -H "Authorization: Bearer <session token>" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://api.yourapp.com/hooks/docuparse",
+       "events":["document.completed","document.failed"]}'
+```
+
+Events: `document.processing`, `document.completed`, `document.failed`.
+
+```jsonc
+{
+  "id": "whd_01M2…",            // stable across retries — use it to dedupe
+  "event": "document.completed",
+  "job_id": "job_01M2…",
+  "document_id": "doc_01M2…",
+  "extraction_id": "ext_01M2…",
+  "status": "completed",
+  "validation": { "overall": "passed" },
+  "occurred_at": "2026-09-18T19:54:36.919878+00:00"
+}
+```
+
+### Signing
+
+Every delivery carries `X-DocuParse-Signature: t=<unix>,v1=<hmac>`, where the
+HMAC-SHA256 is over `"<t>." + raw body`. The timestamp is *inside* the signed
+material, so a captured delivery cannot be replayed later.
+
+```python
+import hashlib, hmac, time
+
+def verify(body: bytes, header: str, secret: str) -> bool:
+    parts = dict(p.split("=", 1) for p in header.split(","))
+    issued_at, received = int(parts["t"]), parts["v1"]
+    if abs(time.time() - issued_at) > 300:
+        return False
+    expected = hmac.new(
+        secret.encode(), f"{issued_at}.".encode() + body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, received)
+```
+
+**There is no webhook secret at rest.** Each endpoint's secret is derived from
+the deployment's `WEBHOOK_SECRET` plus the endpoint's id and a version counter,
+so there is nothing in the database to leak, and rotating one endpoint is a
+version bump. That also means the secret genuinely cannot be shown twice.
+
+### Retries
+
+`5xx`, timeouts and refused connections retry with exponential backoff — 30s,
+1m, 2m, 4m, up to a six-hour cap — bounded by `WEBHOOK_MAX_ATTEMPTS`. A `4xx`
+does not retry: the receiver understood and refused. An endpoint that fails
+`WEBHOOK_FAILURE_THRESHOLD` times in a row is disabled until you re-enable it.
+
+The receiver's response body is never stored — only the status code. That is
+somebody else's server talking.
+
+### Webhook URLs are an SSRF vector
+
+A customer-supplied URL is not just a string: left unchecked, "deliver my
+webhook to `http://169.254.169.254/`" turns this service into a proxy for
+reading cloud instance metadata. Every destination is resolved and checked
+against private, loopback, link-local, multicast and reserved address space —
+at registration *and* again immediately before each delivery, because DNS can
+change in between. Redirects are not followed, since a redirect is another hop.
+`WEBHOOK_ALLOW_PRIVATE_URLS=true` exists for local development and re-opens
+exactly the hole this closes; never set it in production.
+
+Known residual risk: re-checking narrows the DNS-rebinding window to one
+connection rather than closing it. Closing it entirely needs connection-level
+IP pinning.
+
 ## Dashboard and playground
 
 `frontend/` is a Next.js 15 app in TypeScript and Tailwind 4 — a light theme
@@ -330,16 +463,16 @@ free of gradients and animation.
 | Page | What it does |
 |---|---|
 | `/dashboard` | Requests, documents, success rate, average latency, a 30-day chart, quota, and the recent request log. |
-| `/playground` | Upload an invoice, run it, and see the JSON, validation, per-field confidence, timing and a cURL command. |
+| `/playground` | Upload an invoice, run it synchronously or as a background job, and see the JSON, validation, per-field confidence, timing and a cURL command. |
 | `/documents` | Everything uploaded, with per-document extraction results and one-click deletion. |
 | `/usage` | 7/30/90-day totals and the full request log, with the estimated provider cost per request. |
 | `/api-keys` | Create, rotate and revoke. The secret is shown once, at creation. |
+| `/webhooks` | Register endpoints, rotate secrets, enable or disable, and read the delivery log. |
 | `/docs` | Quickstart, cURL/Python/JavaScript examples, the error table, and what is not built yet. |
 | `/settings` | The organization, the account, and which API the dashboard is pointed at. |
 
-There is no `/webhooks` or `/billing` page, because neither works yet. Listing
-them as greyed-out menu items would make the dashboard look more finished than
-it is.
+There is no `/billing` page, because billing does not work yet. Listing it as a
+greyed-out menu item would make the dashboard look more finished than it is.
 
 ### The chart is not decorative
 
@@ -365,7 +498,8 @@ backend/app/
 ├── pipelines/    stages/ (preprocess, parse, normalize, confidence) + strategies
 ├── prompts/      versioned extraction prompts
 ├── repositories/ data access — every method is organization-scoped
-├── services/     file validation, storage, retention, extraction orchestration
+├── services/     file validation, storage, retention, extraction, webhooks
+├── workers/      the background worker loop
 └── validators/   GSTIN, totals, line items, supply type, required fields
 ```
 
@@ -496,6 +630,7 @@ make run        # uvicorn with reload
 make test       # pytest — needs no services
 make lint       # ruff
 make setup-web  # npm install for the dashboard
+make worker     # async jobs + webhook delivery
 make web        # the dashboard on :3000
 make test-web   # typecheck + browser smoke check
 make purge      # run the retention sweeper
@@ -509,11 +644,13 @@ a model change without a migration fails the suite rather than production.
 
 ### Tests
 
-226 backend tests covering authentication, API key lifecycle, file validation,
+282 backend tests covering authentication, API key lifecycle, file validation,
 the invoice schema, GSTIN validation, invoice and line-item arithmetic, the
 extraction response, missing fields, malformed files, rate limiting, quota,
 tenant isolation, webhook signatures, provider retry and failure handling,
-retention, usage reporting, and log redaction.
+retention, usage reporting, log redaction, async job lifecycle and retry
+policy, worker claim semantics, webhook signing and replay resistance, delivery
+retries and backoff, and the SSRF guard on webhook destinations.
 
 The dashboard is checked by `frontend/scripts/smoke.mjs`, which drives a real
 browser against a running stack (`npx playwright install chromium` once, then
@@ -534,10 +671,6 @@ repository.
 
 Honest scope. These are designed for but not implemented:
 
-- **Async processing** — `POST /v1/documents`, `GET /v1/jobs/{id}`, worker.
-  The pipeline object is already shared-ready; the queue is not wired.
-- **Webhooks** — delivery, retries and backoff. The HMAC signing primitive
-  exists and is tested; nothing sends yet.
 - **Python SDK.**
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.

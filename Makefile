@@ -5,8 +5,8 @@ FRONTEND := frontend
 PY       := $(BACKEND)/.venv/bin/python
 PIP      := $(BACKEND)/.venv/bin/pip
 
-.PHONY: help setup setup-web up down migrate revision run web build-web test test-web \
-	lint lint-web purge clean
+.PHONY: help setup setup-web up down migrate revision run worker web build-web \
+	test test-web lint lint-web purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -37,6 +37,9 @@ setup-web: ## Install the dashboard's dependencies
 	cd $(FRONTEND) && npm install
 	@test -f $(FRONTEND)/.env.local || (cp $(FRONTEND)/.env.local.example $(FRONTEND)/.env.local \
 		&& echo "Created frontend/.env.local from the example.")
+
+worker: ## Run the background worker (async jobs + webhook delivery)
+	$(PY) scripts/run_worker.py
 
 web: ## Run the dashboard on http://localhost:3000 (needs `make run` too)
 	cd $(FRONTEND) && npm run dev

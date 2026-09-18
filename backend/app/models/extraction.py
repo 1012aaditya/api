@@ -47,6 +47,9 @@ class Extraction(Base):
 
     provider: Mapped[str | None] = mapped_column(String(60), nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # A prompt change is a behaviour change; recording it is what lets a
+    # shift in accuracy be attributed to the prompt that caused it (§33).
+    prompt_version: Mapped[str | None] = mapped_column(String(60), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)

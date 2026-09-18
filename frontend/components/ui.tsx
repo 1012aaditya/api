@@ -216,14 +216,22 @@ export function StatusDot({ status }: { status: CheckStatus }) {
   );
 }
 
-export function StatusBadge({ status }: { status: CheckStatus }) {
+export function StatusBadge({
+  status,
+  label,
+}: {
+  status: CheckStatus;
+  /** Override the wording. The colours carry state; the words carry meaning,
+   *  and "Passed" is wrong for a delivered webhook or an active endpoint. */
+  label?: string;
+}) {
   const style = STATUS_STYLE[status];
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-2 py-0.5 text-xs font-medium ${style.text}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden="true" />
-      {style.label}
+      {label ?? style.label}
     </span>
   );
 }
