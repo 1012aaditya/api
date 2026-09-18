@@ -122,7 +122,7 @@ confidence and a copy-pasteable cURL command.
 ### 7. Run the tests
 
 ```bash
-make test           # 282 backend tests, no services required
+make test           # 311 backend tests, no services required
 make lint
 make test-web       # typecheck + browser smoke check (needs both servers up)
 ```
@@ -336,6 +336,90 @@ and count exactly like an API call — the playground does not get a free path.
 
 ---
 
+## Running it without sending documents anywhere
+
+Invoices are client financial data. If your customers require that it never
+leaves your infrastructure — or you would simply rather promise that — this
+runs fully local.
+
+### The provider is already an interface
+
+```bash
+AI_BASE_URL=http://localhost:8001/v1
+AI_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+```
+
+That is the whole change. The `openai_compatible` adapter speaks the wire
+format that vLLM, Ollama, llama.cpp, LM Studio and LiteLLM all implement, so
+no code moves. Two things about vLLM specifically are worth having: **prefix
+caching**, because the ~3,300-character system prompt is identical on every
+call and becomes nearly free after the first, and **guided decoding**, which
+constrains generation to the schema and guarantees valid JSON — the one thing
+local models are reliably worse at than hosted ones.
+
+### Better: most invoices never need a model at all
+
+The real saving is not a faster model, it is not calling one. Extraction runs
+in tiers, cheapest first, and escalates only when what it has is not enough:
+
+| Tier | Reads | Cost | Covers |
+|---|---|---|---|
+| `qr` | The e-invoice QR — the IRP's own record | ~free, ~5 ms | Registered e-invoices |
+| `text_layer` | The characters already in the PDF | free, ~50 ms | Digital B2B invoices |
+| `model` | A vision model on the page images | expensive | Scans, photos, odd layouts |
+
+Measured on the repository's own fixtures, both cheap tiers return a complete,
+validated header in **107 ms and 157 ms respectively, with no provider call**:
+
+```
+e-invoice PNG   tiers=['qr']          model_called=False   confidence 0.85
+digital PDF     tiers=['text_layer']  model_called=False   confidence 0.95
+```
+
+`EXTRACTION_TIERS` selects which run. Drop `model` from the list and the
+deployment is model-free: a document the cheap tiers cannot read comes back
+partially filled with the gaps **reported**, not guessed.
+
+Line items are the honest catch. Neither cheap tier extracts them — rebuilding
+table columns without layout analysis guesses, and a guessed line item is worse
+than none. So with `EXTRACTION_REQUIRE_LINE_ITEMS=true` (the default) a
+table-bearing invoice still escalates. Set it to `false` when header data —
+numbers, dates, GSTINs, totals — is what your workflow actually needs.
+
+### Two readings are better than one
+
+Even when the model does run, the cheap tiers have already read the document
+independently. That is a correctness win, not only a cost one: the response
+carries a `source_agreement` check, and a disagreement is reported rather than
+resolved behind your back.
+
+```jsonc
+{ "name": "source_agreement", "status": "warning",
+  "message": "Sources disagreed on total. The more direct source was used…",
+  "details": { "conflicts": [ { "field": "total", "kept": "118000.00",
+    "kept_source": "qr", "conflicting": "125000", "conflicting_source": "model" } ] } }
+```
+
+Precedence is by directness: the QR is the IRP's own record, the text layer is
+the literal characters in the file, and the model is a reading of a picture of
+those characters.
+
+### What the QR tier does not do
+
+It does **not verify the signature.** That needs the IRP's public key, which
+this deployment does not ship. A decoded QR is therefore treated as a very
+strong reading, not as proof: the values still go through validation, the
+response says so in `processing.notes`, and a forged QR would be caught by the
+arithmetic checks rather than trusted.
+
+### The honest trade-off
+
+A local 7B model will be meaningfully worse than a frontier model on crumpled
+phone photos and handwriting. The validation layer catches most bad
+extractions before your customer sees them, but you are now the one
+responsible for quality — which makes the evaluation harness (not yet built)
+more important, not less.
+
 ## Asynchronous processing
 
 A 25-page scan can take a while. `POST /v1/documents` stores the upload,
@@ -495,7 +579,7 @@ backend/app/
 ├── models/       SQLAlchemy ORM
 ├── schemas/      Pydantic: invoice, extraction response, envelopes
 ├── providers/    base.py + openai_compatible.py + registry.py
-├── pipelines/    stages/ (preprocess, parse, normalize, confidence) + strategies
+├── pipelines/    tiers (qr, text_layer, model), merge, stages, strategies
 ├── prompts/      versioned extraction prompts
 ├── repositories/ data access — every method is organization-scoped
 ├── services/     file validation, storage, retention, extraction, webhooks
@@ -602,7 +686,9 @@ Every setting, with its default, is documented in
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AI_PROVIDER` | `openai_compatible` | Which adapter to use. |
+| `EXTRACTION_TIERS` | `qr,text_layer,model` | Ordered, cheapest first. Drop `model` to go fully local. |
+| `EXTRACTION_REQUIRE_LINE_ITEMS` | `true` | Off means the cheap tiers can answer alone. |
+| `AI_PROVIDER` | `openai_compatible` | Which adapter to use. Works with vLLM, Ollama, LM Studio. |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | — | The endpoint. No key ⇒ `503`. |
 | `MAX_FILE_SIZE_BYTES` | 20 MiB | Upload ceiling. |
 | `MAX_PAGE_COUNT` | 25 | Page ceiling for the synchronous endpoint. |
@@ -644,13 +730,14 @@ a model change without a migration fails the suite rather than production.
 
 ### Tests
 
-282 backend tests covering authentication, API key lifecycle, file validation,
+311 backend tests covering authentication, API key lifecycle, file validation,
 the invoice schema, GSTIN validation, invoice and line-item arithmetic, the
 extraction response, missing fields, malformed files, rate limiting, quota,
 tenant isolation, webhook signatures, provider retry and failure handling,
 retention, usage reporting, log redaction, async job lifecycle and retry
 policy, worker claim semantics, webhook signing and replay resistance, delivery
-retries and backoff, and the SSRF guard on webhook destinations.
+retries and backoff, the SSRF guard on webhook destinations, QR and text-layer
+extraction, tier routing and escalation, and cross-source conflict reporting.
 
 The dashboard is checked by `frontend/scripts/smoke.mjs`, which drives a real
 browser against a running stack (`npx playwright install chromium` once, then

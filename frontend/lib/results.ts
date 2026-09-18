@@ -85,6 +85,8 @@ export function fromStoredExtraction(
       model: stored.model ?? undefined,
       pages,
       prompt_version: stored.prompt_version ?? undefined,
+      tiers: [],
+      model_called: stored.provider !== null && stored.provider !== "none",
       input_tokens: stored.input_tokens,
       output_tokens: stored.output_tokens,
       estimated_cost_usd: stored.estimated_cost_usd,

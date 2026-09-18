@@ -102,6 +102,11 @@ export interface ConfidenceSummary {
 
 export interface ProcessingSummary {
   duration_ms: number;
+  /** Which tiers contributed, cheapest first: qr, text_layer, model. */
+  tiers: string[];
+  model_called: boolean;
+  escalation_reason: string | null;
+  notes: string[];
   pages: number;
   provider: string;
   model: string;

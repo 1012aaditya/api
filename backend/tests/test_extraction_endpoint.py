@@ -103,7 +103,14 @@ async def test_interstate_invoice_validates_as_igst(
     client: httpx.AsyncClient, tenant: Tenant, use_provider
 ) -> None:
     use_provider(StubProvider(interstate_provider_output()))
-    body = (await client.post(ENDPOINT, files=upload(), headers=tenant.headers)).json()
+    # An image, so only the model reads it. Uploading the default intrastate
+    # PDF would (correctly) have the text layer contradict the stub.
+    body = (
+        await client.post(
+            ENDPOINT, files=upload(build_png(), "scan.png", "image/png"),
+            headers=tenant.headers,
+        )
+    ).json()
     assert body["data"]["tax"]["igst"] == 18000
     assert body["data"]["tax"]["cgst"] is None
     check = next(
@@ -119,7 +126,12 @@ async def test_absent_fields_are_null_never_invented(
     client: httpx.AsyncClient, tenant: Tenant, use_provider
 ) -> None:
     use_provider(StubProvider(sparse_provider_output()))
-    body = (await client.post(ENDPOINT, files=upload(), headers=tenant.headers)).json()
+    body = (
+        await client.post(
+            ENDPOINT, files=upload(build_png(), "scan.png", "image/png"),
+            headers=tenant.headers,
+        )
+    ).json()
     data = body["data"]
     assert data["buyer"]["name"] is None
     assert data["buyer"]["gstin"] is None
@@ -138,7 +150,10 @@ async def test_an_inconsistent_invoice_is_returned_with_failures_not_an_error(
 ) -> None:
     """A bad invoice is a successful extraction of a bad invoice."""
     use_provider(StubProvider(inconsistent_provider_output()))
-    response = await client.post(ENDPOINT, files=upload(), headers=tenant.headers)
+    response = await client.post(
+        ENDPOINT, files=upload(build_png(), "scan.png", "image/png"),
+        headers=tenant.headers,
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["validation"]["overall"] == "failed"
@@ -151,7 +166,12 @@ async def test_low_confidence_fields_are_listed(
     client: httpx.AsyncClient, tenant: Tenant, use_provider
 ) -> None:
     use_provider(StubProvider(inconsistent_provider_output()))
-    body = (await client.post(ENDPOINT, files=upload(), headers=tenant.headers)).json()
+    body = (
+        await client.post(
+            ENDPOINT, files=upload(build_png(), "scan.png", "image/png"),
+            headers=tenant.headers,
+        )
+    ).json()
     assert "buyer.gstin" in body["confidence"]["low_confidence_fields"]
     assert body["confidence"]["fields"]["buyer.gstin"]["band"] == "low"
 

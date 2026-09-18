@@ -366,3 +366,29 @@ ALL_CHECKS = (
     check_line_items,
     check_line_item_sum,
 )
+
+
+# --- Cross-source agreement (§11) --------------------------------------
+#
+# Not part of ALL_CHECKS: it needs the merge result, not just the invoice.
+# The pipeline appends it when more than one tier contributed.
+
+
+def check_source_agreement(conflicts: list[dict[str, Any]]) -> CheckResult:
+    """Did the independent readings of this document agree?
+
+    When the e-invoice QR, the PDF's text layer and the model all read the
+    same field, that agreement is real evidence. When they disagree, the
+    caller needs to know which value they are getting and what the other
+    source said — not a quietly chosen winner.
+    """
+    name = "source_agreement"
+    if not conflicts:
+        return passed(name, "Every source that read a field agreed on it.")
+    fields = ", ".join(sorted({str(c["field"]) for c in conflicts}))
+    return warning(
+        name,
+        f"Sources disagreed on {fields}. The more direct source was used; the "
+        "alternative reading is in the details.",
+        conflicts=conflicts[:10],
+    )

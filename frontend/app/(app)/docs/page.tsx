@@ -333,6 +333,66 @@ export default function DocsPage() {
         </Card>
 
         <Card>
+          <CardHeader
+            title="How a document is read"
+            description="Cheapest source first — the model is the last resort, not the first"
+          />
+          <div className="space-y-4 p-5">
+            <p className="text-sm text-ink-2">
+              Extraction runs in tiers and escalates only when what it already
+              has is not enough. The response tells you which ran, in{" "}
+              <code className="font-mono text-xs text-ink">processing.tiers</code>.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs text-muted">
+                  <tr className="border-b border-line">
+                    <th className="py-2 pr-4 font-medium">Tier</th>
+                    <th className="py-2 pr-4 font-medium">Reads</th>
+                    <th className="py-2 font-medium">Covers</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  <tr>
+                    <td className="py-2 pr-4 font-mono text-xs text-ink">qr</td>
+                    <td className="py-2 pr-4 text-ink-2">
+                      The e-invoice QR — the IRP&apos;s own record
+                    </td>
+                    <td className="py-2 text-ink-2">Registered e-invoices</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 font-mono text-xs text-ink">text_layer</td>
+                    <td className="py-2 pr-4 text-ink-2">
+                      The characters already in the PDF
+                    </td>
+                    <td className="py-2 text-ink-2">Digital B2B invoices</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 font-mono text-xs text-ink">model</td>
+                    <td className="py-2 pr-4 text-ink-2">
+                      A vision model on the page images
+                    </td>
+                    <td className="py-2 text-ink-2">Scans, photos, odd layouts</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="text-sm text-ink-2">
+              When more than one tier reads the same field, the more direct
+              source wins and any disagreement is reported as a{" "}
+              <code className="font-mono text-xs text-ink">source_agreement</code>{" "}
+              check rather than resolved behind your back.
+            </p>
+            <p className="text-xs text-muted">
+              The QR tier does not verify the QR&apos;s signature — that needs the
+              IRP&apos;s public key. A decoded QR is treated as a very strong
+              reading, not as proof, and the response says so in{" "}
+              <code className="font-mono">processing.notes</code>.
+            </p>
+          </div>
+        </Card>
+
+        <Card>
           <CardHeader title="Not available yet" />
           <ul className="space-y-2 p-5 text-sm text-ink-2">
             <li>The Python SDK</li>

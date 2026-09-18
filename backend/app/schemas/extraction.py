@@ -51,6 +51,25 @@ class ProcessingSummary(BaseModel):
     provider: str
     model: str
     prompt_version: str
+    tiers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which extraction tiers contributed, cheapest first: 'qr' (the "
+            "e-invoice QR), 'text_layer' (the PDF's own characters), 'model'."
+        ),
+    )
+    model_called: bool = Field(
+        default=True,
+        description="False when the cheaper tiers answered on their own.",
+    )
+    escalation_reason: str | None = Field(
+        default=None,
+        description="Why the model was needed, when it was.",
+    )
+    notes: list[str] = Field(
+        default_factory=list,
+        description="What each tier did, and anything it deliberately left alone.",
+    )
     provider_latency_ms: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None

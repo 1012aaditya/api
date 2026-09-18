@@ -88,6 +88,16 @@ class Settings(BaseSettings):
     # --- Retention ---
     document_retention_days: int = 7
 
+    # --- Extraction tiers (§34) ---
+    # Ordered, cheapest first. Dropping "model" makes the deployment fully
+    # local and model-free: documents that the cheap tiers cannot read come
+    # back partially filled with the gaps reported, rather than guessed.
+    extraction_tiers: str = "qr,text_layer,model"
+    # Line items are never produced by the qr or text_layer tiers. Leave this
+    # on and a document with a line-item table escalates to the model; turn it
+    # off when header-level data is all your workflow needs.
+    extraction_require_line_items: bool = True
+
     # --- Validation tuning ---
     rounding_tolerance: Decimal = Decimal("1.0")
     confidence_high_threshold: float = 0.85
@@ -108,6 +118,19 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def enabled_tiers(self) -> tuple[str, ...]:
+        seen: list[str] = []
+        for name in self.extraction_tiers.split(","):
+            cleaned = name.strip().lower()
+            if cleaned and cleaned not in seen:
+                seen.append(cleaned)
+        return tuple(seen)
+
+    @property
+    def model_tier_enabled(self) -> bool:
+        return "model" in self.enabled_tiers
 
     @property
     def webhooks_configured(self) -> bool:

@@ -288,6 +288,19 @@ export default function PlaygroundPage() {
             </Card>
           )}
 
+          {result?.processing.model_called === false && (
+            <Card className="border-good/30">
+              <div className="p-5 text-sm text-ink-2">
+                <p className="font-medium text-ink">No model was called.</p>
+                <p className="mt-1.5">
+                  This document was read by the cheaper tiers alone — the
+                  e-invoice QR and the PDF&apos;s own text layer. Nothing was sent
+                  to a provider, and it cost nothing.
+                </p>
+              </div>
+            </Card>
+          )}
+
           {result && (
             <Card>
               <CardHeader title="Processing" />
@@ -300,6 +313,10 @@ export default function PlaygroundPage() {
                 <Row
                   label="Pages"
                   value={result.processing.pages === null ? "—" : String(result.processing.pages)}
+                />
+                <Row
+                  label="Read by"
+                  value={(result.processing.tiers ?? []).join(" → ") || "—"}
                 />
                 <Row label="Model" value={result.processing.model ?? "—"} mono />
                 <Row label="Prompt" value={result.processing.prompt_version ?? "—"} mono />
@@ -318,6 +335,19 @@ export default function PlaygroundPage() {
                 <Row label="Request id" value={result.requestId ?? "—"} mono />
                 <Row label="Document id" value={result.documentId} mono />
               </dl>
+              {result.processing.escalation_reason && (
+                <p className="border-t border-line px-5 py-3 text-xs text-muted">
+                  Escalated to the model because:{" "}
+                  {result.processing.escalation_reason}
+                </p>
+              )}
+              {(result.processing.notes ?? []).length > 0 && (
+                <ul className="space-y-1.5 border-t border-line px-5 py-3 text-xs text-muted">
+                  {result.processing.notes?.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
             </Card>
           )}
         </div>
