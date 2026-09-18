@@ -1,0 +1,57 @@
+# Dependencies for local development. The API itself runs on the host so that
+# reloads are instant; see README.md.
+#
+#   docker compose up -d
+#
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: docuparse-postgres
+    environment:
+      POSTGRES_USER: docuparse
+      POSTGRES_PASSWORD: docuparse
+      POSTGRES_DB: docuparse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuparse -d docuparse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: docuparse-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # An S3-compatible bucket, so STORAGE_BACKEND=s3 can be exercised locally.
+  # Optional: the default STORAGE_BACKEND=local needs nothing running.
+  minio:
+    image: minio/minio:latest
+    container_name: docuparse-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: docuparse
+      MINIO_ROOT_PASSWORD: docuparse-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  minio-data:
