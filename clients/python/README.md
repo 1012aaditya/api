@@ -73,6 +73,39 @@ The export streams to disk and is written atomically: a failure part-way
 through leaves your previous export intact rather than replacing it with half a
 file.
 
+## Into Tally
+
+```python
+client.tally.import_ledgers("ledger-master.xml")  # once
+client.tally.configure(  # once
+    company_name="Acme Traders Pvt Ltd",
+    purchase_ledger="Purchase 18%",
+    cgst_ledger="Input CGST",
+    sgst_ledger="Input SGST",
+    round_off_ledger="Round Off",
+)
+
+preview = client.tally.preview(batch_id=batch.id)
+for supplier in preview["unmatched_suppliers"]:
+    best = supplier["suggestions"][0]  # a suggestion, not an answer
+    client.tally.confirm_match(best["ledger_id"], supplier_name=supplier["name"])
+
+client.tally.vouchers("september-vouchers.xml", batch_id=batch.id)
+```
+
+Suppliers resolve by GSTIN, then by a mapping you confirmed earlier, then by
+name. Anything less certain is a *suggestion* — the library never applies one.
+Each confirmation is remembered, so that supplier resolves itself next month.
+
+An invoice whose parts do not add up to its total is never written to the file;
+it stays in `preview["vouchers"]` with the arithmetic that failed. If nothing is
+postable, `vouchers()` raises rather than writing an empty envelope — which
+would import into Tally perfectly and do nothing.
+
+**Not verified against a real Tally installation.** The file is well-formed and
+every voucher balances, but import it into a test company and check one voucher
+before trusting it with a month of purchases.
+
 ## One at a time, in the background
 
 ```python
@@ -164,6 +197,16 @@ client.batches.wait(id, timeout=, poll_interval=) -> Batch
 client.exports.invoices(dest, start=, end=, batch_id=)   -> Path | bytes
 client.exports.line_items(dest, start=, end=, batch_id=) -> Path | bytes
 
+client.tally.import_ledgers(file)          -> dict
+client.tally.ledgers(search=, limit=)      -> list[dict]
+client.tally.settings()                    -> dict
+client.tally.configure(**ledger_names)     -> dict
+client.tally.preview(start=, end=, batch_id=) -> dict
+client.tally.confirm_match(ledger_id, supplier_name=, supplier_gstin=) -> list[dict]
+client.tally.matches()                     -> list[dict]
+client.tally.forget_match(alias_id)        -> None
+client.tally.vouchers(dest, start=, end=, batch_id=) -> Path | bytes
+
 client.usage.summary(days=)                -> dict
 client.usage.events(limit=, offset=)       -> list[dict]
 ```
@@ -182,7 +225,7 @@ tomorrow is readable today without upgrading this package.
 
 ```bash
 pip install -e ".[dev]"
-pytest          # 51 tests, no network
+pytest          # 58 tests, no network
 ruff check .
 ```
 

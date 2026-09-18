@@ -288,6 +288,64 @@ export default function DocsPage() {
         </Card>
 
         <Card>
+          <CardHeader
+            title="Post to Tally"
+            description="The last mile: extracted invoices as purchase vouchers"
+          />
+          <div className="space-y-4 p-5">
+            <CopyableCommand
+              command={[
+                `# Once: import your chart of accounts.`,
+                `# Tally: Gateway → Display → List of Accounts → Export as XML.`,
+                `curl -X POST ${API_URL}/v1/tally/ledgers \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx" \\`,
+                `  -F "file=@ledger-master.xml"`,
+                ``,
+                `# Every month: look before you post.`,
+                `curl -G ${API_URL}/v1/tally/preview \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx" -d batch_id=bat_01M2...`,
+                ``,
+                `# Then download the import file.`,
+                `curl -OJ "${API_URL}/v1/tally/vouchers.xml?batch_id=bat_01M2..." \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx"`,
+              ].join("\n")}
+            />
+            <ul className="space-y-1.5 text-sm text-ink-2">
+              <li>
+                Suppliers are matched to your ledgers by GSTIN first, then by a
+                mapping you confirmed earlier, then by name. Anything less
+                certain is offered as a <em>suggestion</em> and never applied on
+                its own.
+              </li>
+              <li>
+                Every confirmation is remembered against both the GSTIN and the
+                name, so that supplier resolves itself next month. Re-importing
+                your ledger master keeps them.
+              </li>
+              <li>
+                <strong className="text-ink">
+                  An invoice whose parts do not add up to its total is never
+                  written.
+                </strong>{" "}
+                It appears in the preview with the arithmetic that failed. A
+                difference within ₹1 goes to the round-off ledger and says so.
+              </li>
+              <li>
+                If nothing is postable the export returns an error rather than
+                an empty file — an empty envelope imports into Tally perfectly
+                and does nothing.
+              </li>
+            </ul>
+            <p className="rounded-md bg-surface-sunken px-3 py-2 text-xs text-ink-2">
+              <strong className="text-ink">Not verified yet.</strong> The file is
+              well-formed and every voucher balances, but it has not been
+              imported into a real Tally installation by us. Import into a test
+              company and check one voucher first.
+            </p>
+          </div>
+        </Card>
+
+        <Card>
           <CardHeader title="Limits" />
           <ul className="space-y-2 p-5 text-sm text-ink-2">
             <li>PDF, PNG, JPG and JPEG. The file&apos;s own bytes decide, not its extension.</li>
@@ -520,6 +578,10 @@ export default function DocsPage() {
           <CardHeader title="Not available yet" />
           <ul className="space-y-2 p-5 text-sm text-ink-2">
             <li>Billing and subscriptions</li>
+            <li>
+              Accounting software other than Tally — Busy, Marg, Zoho Books and
+              Vyapar. Use the CSV export for those.
+            </li>
             <li>An async Python client, and webhook helpers in the SDK</li>
             <li>A JavaScript SDK — use <code className="font-mono text-xs">fetch</code> for now</li>
           </ul>

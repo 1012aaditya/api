@@ -13,6 +13,7 @@ const NAV = [
   { href: "/playground", label: "Playground" },
   { href: "/batches", label: "Bulk upload" },
   { href: "/documents", label: "Documents" },
+  { href: "/tally", label: "Post to Tally" },
   { href: "/usage", label: "Usage" },
   { href: "/api-keys", label: "API keys" },
   { href: "/webhooks", label: "Webhooks" },

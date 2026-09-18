@@ -135,8 +135,8 @@ confidence and a copy-pasteable cURL command.
 ### 7. Run the tests
 
 ```bash
-make test           # 326 backend tests, no services required
-make test-sdk       # 51 Python client tests, no services required
+make test           # 388 backend tests, no services required
+make test-sdk       # 58 Python client tests, no services required
 make lint
 make test-web       # typecheck + browser smoke check (needs both servers up)
 ```
@@ -329,6 +329,13 @@ Consistent envelope, stable codes, no stack traces and no provider details:
 | `GET` | `/v1/batches` · `/v1/batches/{id}` | either | Batch progress, counted from the jobs themselves. |
 | `GET` | `/v1/exports/invoices.csv` | either | Streaming CSV, one row per invoice. |
 | `GET` | `/v1/exports/line-items.csv` | either | Streaming CSV, one row per line item. |
+| `POST` | `/v1/tally/ledgers` | either | **Import the ledger master exported from Tally.** |
+| `GET` | `/v1/tally/ledgers` | either | The imported chart of accounts. |
+| `GET` · `PUT` | `/v1/tally/settings` | either | Which ledgers the tax and purchase legs post to. |
+| `GET` | `/v1/tally/preview` | either | What would be posted, and what would not. |
+| `POST` · `GET` | `/v1/tally/matches` | either | Confirm which ledger a supplier is; list confirmations. |
+| `DELETE` | `/v1/tally/matches/{id}` | either | Forget a confirmed mapping. |
+| `GET` | `/v1/tally/vouchers.xml` | either | **Purchase vouchers as a Tally import file.** |
 | `GET` | `/v1/documents` | API key | List your documents. |
 | `GET` | `/v1/documents/{id}` | API key | One document's metadata. |
 | `DELETE` | `/v1/documents/{id}` | API key | Delete the stored bytes now. |
@@ -351,6 +358,107 @@ replayed from the browser) and needs to read the same data.
 `/v1/invoices/extract` also accepts a session, so the playground can run a real
 extraction. Those runs are tagged `dashboard_request` in the usage log and cost
 and count exactly like an API call — the playground does not get a free path.
+
+---
+
+## Posting to Tally
+
+A CSV is not what anyone wanted. They wanted the entry *in their books*. This
+is the last mile, and it is where most of the actual work of this feature is.
+
+```bash
+# 1. Once: import the chart of accounts.
+#    In Tally: Gateway → Display → List of Accounts → Export as XML.
+curl -X POST .../v1/tally/ledgers -H "Authorization: Bearer $KEY" \
+  -F "file=@ledger-master.xml"
+# → {"imported": 412, "replaced": 0, "aliases_kept": 0}
+
+# 2. Once: say where the non-supplier legs post.
+curl -X PUT .../v1/tally/settings -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"company_name":"Acme Traders Pvt Ltd","purchase_ledger":"Purchase 18%",
+       "cgst_ledger":"Input CGST","sgst_ledger":"Input SGST","igst_ledger":"Input IGST",
+       "round_off_ledger":"Round Off"}'
+
+# 3. Every month: look before you post.
+curl -G .../v1/tally/preview -H "Authorization: Bearer $KEY" -d batch_id=bat_01M2...
+# → {"postable": 194, "blocked": 6, "unmatched_suppliers": [...]}
+
+# 4. Download.
+curl -OJ ".../v1/tally/vouchers.xml?batch_id=bat_01M2..." -H "Authorization: Bearer $KEY"
+```
+
+### Matching a supplier to a ledger
+
+The invoice prints `ACME TRADERS PVT. LTD.`. Their books hold `Acme Traders -
+Bengaluru`. Nothing on the page says those are the same account, and guessing
+wrong posts real money to the wrong supplier.
+
+So four strategies run, strongest first, and only the first three ever resolve
+anything:
+
+| | Basis | Resolves? |
+|---|---|---|
+| **GSTIN** | The registration number on both sides | Yes — identity, not resemblance |
+| **Confirmed alias** | A human answered this before | Yes |
+| **Normalised name** | Same string once case, punctuation and `Pvt Ltd` are gone | Yes |
+| **Similarity** | It looks close | **No** — offered as a suggestion only |
+
+A near-miss is shown to a person, never applied. And when two of their ledgers
+normalise to the same key, *neither* is used: picking whichever was imported
+first would silently post to the wrong one.
+
+**Confirmations are the thing that compounds.** A human answers "which ledger
+is this?" once, and it is stored against both the GSTIN and the name. Next
+month that supplier resolves itself. Re-importing the master carries those
+confirmations across by ledger name rather than dropping them — six months in,
+the deployment is better at *their* books than a fresh install could be, and
+that is the only moat here that grows instead of eroding.
+
+### What is never posted
+
+Tally's format has three conventions that corrupt data silently when you get
+them wrong: dates are `YYYYMMDD`, `ISDEEMEDPOSITIVE=Yes` means *debit* and a
+debit's amount is *negative*, and every voucher must sum to zero.
+
+The last one is a rule, not a formatting detail. An invoice whose parts do not
+add up to its printed total is **not written to the file** — it appears in the
+preview with the arithmetic that failed. A difference within ₹1 goes to the
+round-off ledger and says so; anything larger means a field was misread, and
+working out which one is not our job.
+
+The same applies to everything else that would require a guess: an unmatched
+supplier, a missing invoice date or number, GST charged with no ledger
+configured to receive it. All of it is reported, none of it is approximated.
+
+> A missing entry is something a bookkeeper notices at month end. A wrong one
+> quietly reconciles to something untrue.
+
+If nothing is postable the export returns an error rather than an empty
+envelope — an empty envelope imports into Tally perfectly and does nothing,
+which is the worst possible outcome.
+
+### From Python
+
+```python
+client.tally.import_ledgers("ledger-master.xml")
+client.tally.configure(purchase_ledger="Purchase 18%", cgst_ledger="Input CGST", ...)
+
+preview = client.tally.preview(batch_id=batch.id)
+for supplier in preview["unmatched_suppliers"]:
+    print(supplier["name"], "→", [s["ledger_name"] for s in supplier["suggestions"]])
+    client.tally.confirm_match(chosen_ledger_id, supplier_name=supplier["name"])
+
+client.tally.vouchers("september-vouchers.xml", batch_id=batch.id)
+```
+
+### Not verified yet
+
+The file is well-formed XML, every voucher balances to zero, and the conventions
+above are implemented deliberately — but **it has not been imported into a real
+Tally installation**. Import into a test company and check one voucher before
+trusting it with a month of purchases. The dashboard says the same thing, in
+the same words, above the download button.
 
 ---
 
@@ -709,6 +817,7 @@ free of gradients and animation.
 | `/playground` | Upload an invoice, run it synchronously or as a background job, and see the JSON, validation, per-field confidence, timing and a cURL command. |
 | `/batches` | Drop a folder of invoices in, watch the batch drain, and download the results as CSV. |
 | `/documents` | Everything uploaded, with per-document extraction results and one-click deletion. |
+| `/tally` | Import your ledger master, match suppliers once, and download a month of purchase vouchers. |
 | `/usage` | 7/30/90-day totals and the full request log, with the estimated provider cost per request. |
 | `/api-keys` | Create, rotate and revoke. The secret is shown once, at creation. |
 | `/webhooks` | Register endpoints, rotate secrets, enable or disable, and read the delivery log. |
@@ -904,7 +1013,7 @@ a model change without a migration fails the suite rather than production.
 
 ### Tests
 
-326 backend tests covering authentication, API key lifecycle, file validation,
+388 backend tests covering authentication, API key lifecycle, file validation,
 the invoice schema, GSTIN validation, invoice and line-item arithmetic, the
 extraction response, missing fields, malformed files, rate limiting, quota,
 tenant isolation, webhook signatures, provider retry and failure handling,
@@ -912,11 +1021,13 @@ retention, usage reporting, log redaction, async job lifecycle and retry
 policy, worker claim semantics, webhook signing and replay resistance, delivery
 retries and backoff, the SSRF guard on webhook destinations, QR and text-layer
 extraction, tier routing and escalation, cross-source conflict reporting,
-bulk-upload partial acceptance, and CSV export escaping and null handling.
+bulk-upload partial acceptance, CSV export escaping and null handling, and
+the Tally integration: ledger matching, voucher balance, and the ledger-master
+parser's refusal of a hostile XML upload.
 
-51 client tests cover the Python SDK — response parsing, decimal exactness,
+58 client tests cover the Python SDK — response parsing, decimal exactness,
 the error hierarchy, the asymmetric retry policy, batch and directory upload,
-and atomic CSV download — driving the real client through
+atomic CSV download, and the Tally namespace — driving the real client through
 `httpx.MockTransport`, so what is under test is the request the library
 actually builds.
 
@@ -944,6 +1055,11 @@ Honest scope. These are designed for but not implemented:
 - **Deployment** — there is no Dockerfile and no hosted endpoint. The stack
   runs from `make`, on one machine.
 - **An async Python client**, webhook helpers in the SDK, and a JavaScript SDK.
+- **Tally verified against a real installation** — the voucher file is
+  well-formed and every voucher balances, but nobody has watched one import
+  into Tally itself. Import into a test company before trusting it.
+- **Other accounting software** — Busy, Marg, Zoho Books and Vyapar are not
+  supported. The CSV export is the fallback.
 - **Evaluation harness** — the synthetic corpus generator exists in
   `tests/fixtures/`; field-level accuracy scoring does not.
 

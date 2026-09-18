@@ -7,6 +7,7 @@ from app.models.document import Document, DocumentStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.extraction_job import ExtractionJob, JobStatus
 from app.models.organization import Organization
+from app.models.tally import Ledger, LedgerAlias, TallySettings
 from app.models.usage_event import UsageEvent
 from app.models.user import User
 from app.models.validation_result import ValidationResult
@@ -23,7 +24,10 @@ __all__ = [
     "ExtractionJob",
     "ExtractionStatus",
     "JobStatus",
+    "Ledger",
+    "LedgerAlias",
     "Organization",
+    "TallySettings",
     "UsageEvent",
     "User",
     "ValidationResult",

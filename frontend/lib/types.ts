@@ -290,3 +290,71 @@ export interface BatchProgress {
   done: boolean;
   created_at: string;
 }
+
+// --- Tally -------------------------------------------------------------
+
+export interface Ledger {
+  id: string;
+  name: string;
+  gstin: string | null;
+  parent_group: string | null;
+}
+
+export interface LedgerImportResult {
+  imported: number;
+  replaced: number;
+  aliases_kept: number;
+}
+
+export interface TallySettings {
+  company_name: string | null;
+  voucher_type: string;
+  purchase_ledger: string | null;
+  cgst_ledger: string | null;
+  sgst_ledger: string | null;
+  igst_ledger: string | null;
+  utgst_ledger: string | null;
+  cess_ledger: string | null;
+  round_off_ledger: string | null;
+  other_charges_ledger: string | null;
+  configured: boolean;
+  ledger_count: number;
+  unknown_ledgers: string[];
+}
+
+export interface LedgerSuggestion {
+  ledger_id: string;
+  ledger_name: string;
+  score: number;
+}
+
+export interface UnmatchedSupplier {
+  name: string;
+  gstin: string | null;
+  documents: number;
+  suggestions: LedgerSuggestion[];
+}
+
+export interface VoucherPreview {
+  document_id: string;
+  filename: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  supplier_name: string | null;
+  supplier_gstin: string | null;
+  total: string | null;
+  ledger_name: string | null;
+  match_method: string;
+  postable: boolean;
+  blockers: string[];
+  notes: string[];
+}
+
+export interface TallyPreview {
+  postable: number;
+  blocked: number;
+  ledger_count: number;
+  settings_configured: boolean;
+  unmatched_suppliers: UnmatchedSupplier[];
+  vouchers: VoucherPreview[];
+}

@@ -281,6 +281,151 @@ class Exports(_Resource):
         )
 
 
+class Tally(_Resource):
+    """Posting extracted invoices into Tally.
+
+    The flow is: import your ledger master once, say which ledgers the tax legs
+    post to once, then each month preview, resolve any supplier we could not
+    place, and download.
+    """
+
+    def import_ledgers(
+        self, file: FileInput, *, timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Upload the ledger master exported from Tally (XML), or a CSV.
+
+        This replaces the stored master, because the export is the truth — a
+        ledger deleted in Tally should stop being offered. Supplier matches
+        already confirmed are carried across by ledger name; the result says
+        how many survived.
+        """
+        name, payload, content_type = _files.prepare(file, default_name="master.xml")
+        body = self._t.request(
+            "POST",
+            "/v1/tally/ledgers",
+            files={"file": (name, payload, content_type)},
+            timeout=timeout,
+        )
+        return body.get("data") or {}
+
+    def ledgers(
+        self, *, search: Optional[str] = None, limit: int = 200, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if search:
+            params["search"] = search
+        body = self._t.request("GET", "/v1/tally/ledgers", params=params)
+        return list(body.get("data") or [])
+
+    def settings(self) -> Dict[str, Any]:
+        body = self._t.request("GET", "/v1/tally/settings")
+        return body.get("data") or {}
+
+    def configure(self, **fields: Any) -> Dict[str, Any]:
+        """Set the ledgers the non-supplier legs post to.
+
+        Check ``unknown_ledgers`` on the result: Tally rejects a voucher naming
+        a ledger that does not exist, and it does so after you have already
+        opened it.
+        """
+        body = self._t.request("PUT", "/v1/tally/settings", json_body=fields)
+        return body.get("data") or {}
+
+    def preview(
+        self,
+        *,
+        start: Union[str, dt.date, None] = None,
+        end: Union[str, dt.date, None] = None,
+        batch_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> Dict[str, Any]:
+        """What would be posted, and what would not, before anything is."""
+        params: Dict[str, Any] = {"limit": limit}
+        if start is not None:
+            params["from"] = _date_param(start)
+        if end is not None:
+            params["to"] = _date_param(end)
+        if batch_id:
+            params["batch_id"] = batch_id
+        body = self._t.request("GET", "/v1/tally/preview", params=params)
+        return body.get("data") or {}
+
+    def confirm_match(
+        self,
+        ledger_id: str,
+        *,
+        supplier_name: Optional[str] = None,
+        supplier_gstin: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Say which ledger a supplier is. Remembered for next month."""
+        body = self._t.request(
+            "POST",
+            "/v1/tally/matches",
+            json_body={
+                "ledger_id": ledger_id,
+                "supplier_name": supplier_name,
+                "supplier_gstin": supplier_gstin,
+            },
+        )
+        return list(body.get("data") or [])
+
+    def matches(self) -> List[Dict[str, Any]]:
+        body = self._t.request("GET", "/v1/tally/matches")
+        return list(body.get("data") or [])
+
+    def forget_match(self, alias_id: str) -> None:
+        self._t.request("DELETE", f"/v1/tally/matches/{alias_id}")
+
+    def vouchers(
+        self,
+        destination: Union[str, "os.PathLike[str]", None] = None,
+        *,
+        start: Union[str, dt.date, None] = None,
+        end: Union[str, dt.date, None] = None,
+        batch_id: Optional[str] = None,
+        timeout: Optional[float] = 300.0,
+    ) -> Union[Path, bytes]:
+        """Download the Tally import file.
+
+        Only postable vouchers are in it. Anything held back is absent rather
+        than approximated — ``preview`` says which, and why. If nothing is
+        ready the server refuses rather than handing you an empty envelope that
+        imports cleanly and does nothing.
+        """
+        params: Dict[str, Any] = {}
+        if start is not None:
+            params["from"] = _date_param(start)
+        if end is not None:
+            params["to"] = _date_param(end)
+        if batch_id:
+            params["batch_id"] = batch_id
+
+        chunks = self._t.stream_to(
+            "/v1/tally/vouchers.xml", params=params, timeout=timeout
+        )
+        if destination is None:
+            return b"".join(chunks)
+
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            dir=str(target.parent),
+            prefix=f".{target.name}.",
+            suffix=".part",
+            delete=False,
+        )
+        partial = Path(handle.name)
+        try:
+            with handle:
+                for chunk in chunks:
+                    handle.write(chunk)
+            os.replace(partial, target)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        return target
+
+
 class Usage(_Resource):
     """Consumption and quota."""
 
@@ -338,6 +483,7 @@ class DocuParse:
         self.jobs = Jobs(self._transport)
         self.batches = Batches(self._transport)
         self.exports = Exports(self._transport)
+        self.tally = Tally(self._transport)
         self.usage = Usage(self._transport)
 
     # -- the one call most people need ----------------------------------
