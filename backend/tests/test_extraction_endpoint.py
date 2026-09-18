@@ -347,3 +347,30 @@ async def test_the_uploaded_bytes_are_stored(
     assert object_store.objects[document.storage_key] == content
     assert document.retention_expires_at is not None
     assert body["document_id"] == document.id
+
+
+async def test_an_unexpected_failure_still_closes_out_the_document(
+    client: httpx.AsyncClient, tenant: Tenant, use_provider
+) -> None:
+    """No document may be left stranded in 'processing'.
+
+    A DocuParseError is handled explicitly; anything else used to escape the
+    handler and leave the row — and the usage event — unwritten.
+    """
+    use_provider(StubProvider(raises=RuntimeError("something nobody predicted")))
+    response = await client.post(ENDPOINT, files=upload(), headers=tenant.headers)
+    assert response.status_code == 500
+
+    async with get_session_factory()() as session:
+        document = (await session.execute(select(Document))).scalar_one()
+        extraction = (await session.execute(select(Extraction))).scalar_one()
+        event = (await session.execute(select(UsageEvent))).scalar_one()
+
+    assert document.status == "failed"
+    assert extraction.status == "failed"
+    assert extraction.error_code == "internal_error"
+    # The provider was reached, so it cost money and counts against quota.
+    assert event.billable is True
+    assert event.status_code == 500
+    # And the internal detail never reaches the customer.
+    assert "nobody predicted" not in response.text

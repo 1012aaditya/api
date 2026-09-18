@@ -106,7 +106,7 @@ curl -X POST http://localhost:8000/v1/invoices/extract \
 ### 6. Run the tests
 
 ```bash
-make test           # 210 tests, no services required
+make test           # 211 tests, no services required
 make lint
 ```
 
@@ -458,7 +458,7 @@ a model change without a migration fails the suite rather than production.
 
 ### Tests
 
-210 tests covering authentication, API key lifecycle, file validation, the
+211 tests covering authentication, API key lifecycle, file validation, the
 invoice schema, GSTIN validation, invoice and line-item arithmetic, the
 extraction response, missing fields, malformed files, rate limiting, quota,
 tenant isolation, webhook signatures, provider retry and failure handling,

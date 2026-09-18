@@ -44,16 +44,6 @@ class PipelineResult:
     dropped_fields: list[str]
     normalized_fields: list[str]
 
-    @property
-    def succeeded(self) -> bool:
-        """Extraction succeeded; validation may still report problems.
-
-        These are different questions. A genuinely inconsistent invoice is a
-        successful extraction of an inconsistent invoice, and the caller
-        needs to see it rather than get an error.
-        """
-        return True
-
 
 class ExtractionPipeline:
     def __init__(

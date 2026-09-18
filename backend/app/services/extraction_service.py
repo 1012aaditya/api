@@ -114,6 +114,25 @@ class ExtractionService:
                 started=started,
             )
             raise
+        except Exception as exc:
+            # An unexpected exception must not leave the document stuck in
+            # "processing" with no extraction row and no usage event. Record
+            # it as an internal failure, then let the original propagate so
+            # the handler still logs the real traceback.
+            logger.exception("extraction.unexpected_error", document_id=document.id)
+            await self._on_failure(
+                auth=auth,
+                document_id=document.id,
+                request_id=request_id,
+                endpoint=endpoint,
+                error=DocuParseError(
+                    "An unexpected error occurred while extracting this document."
+                ),
+                pages=file.page_count,
+                provider=provider,
+                started=started,
+            )
+            raise exc
 
         return await self._on_success(
             auth=auth,
