@@ -164,6 +164,58 @@ export default function DocsPage() {
         </Card>
 
         <Card>
+          <CardHeader
+            title="Bulk upload and export"
+            description="For folders of invoices, and for people who work in spreadsheets"
+          />
+          <div className="space-y-4 p-5">
+            <CopyableCommand
+              command={[
+                `# Upload many at once`,
+                `curl -X POST ${API_URL}/v1/batches \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx" \\`,
+                `  -F "name=September purchases" \\`,
+                `  -F "files=@invoice-1.pdf" -F "files=@invoice-2.pdf"`,
+                ``,
+                `# → {"batch_id":"bat_01M2...","accepted":2,"rejected":[]}`,
+                ``,
+                `curl ${API_URL}/v1/batches/bat_01M2... \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx"`,
+                ``,
+                `# Then pull the results as a spreadsheet`,
+                `curl -OJ ${API_URL}/v1/exports/invoices.csv?batch_id=bat_01M2... \\`,
+                `  -H "Authorization: Bearer dp_live_xxxxxxxx"`,
+              ].join("\n")}
+            />
+            <ul className="space-y-1.5 text-sm text-ink-2">
+              <li>
+                One bad file does not fail the batch. The good ones are queued
+                and the rest come back in{" "}
+                <code className="font-mono text-xs">rejected</code> with the reason.
+              </li>
+              <li>
+                If a batch would take you past your monthly quota, the files that
+                fit are queued and the rest are named — nothing is silently lost.
+              </li>
+              <li>
+                <code className="font-mono text-xs">invoices.csv</code> is one row
+                per document;{" "}
+                <code className="font-mono text-xs">line-items.csv</code> is one
+                row per item, for HSN-wise reconciliation. Both take{" "}
+                <code className="font-mono text-xs">from</code>,{" "}
+                <code className="font-mono text-xs">to</code> and{" "}
+                <code className="font-mono text-xs">batch_id</code>.
+              </li>
+              <li>
+                A field that was not on the document is an empty cell, never the
+                word &quot;None&quot; — a formula over that would quietly produce
+                nonsense.
+              </li>
+            </ul>
+          </div>
+        </Card>
+
+        <Card>
           <CardHeader title="Limits" />
           <ul className="space-y-2 p-5 text-sm text-ink-2">
             <li>PDF, PNG, JPG and JPEG. The file&apos;s own bytes decide, not its extension.</li>

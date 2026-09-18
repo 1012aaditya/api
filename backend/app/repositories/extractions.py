@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from decimal import Decimal
 from typing import Any
 
@@ -112,3 +113,51 @@ class ExtractionRepository:
             )
         ).scalar_one_or_none()
         return extraction, validation
+
+    async def iter_for_export(
+        self,
+        organization_id: str,
+        *,
+        since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
+        batch_id: str | None = None,
+        only_succeeded: bool = True,
+        page_size: int = 200,
+    ):
+        """Yield (extraction, document, validation) in pages.
+
+        Paged rather than loaded whole: an export of a year's invoices should
+        not have to fit in memory before the first byte reaches the client.
+        """
+        from app.models import Document, ValidationResult
+
+        offset = 0
+        while True:
+            query = (
+                select(Extraction, Document, ValidationResult)
+                .join(Document, Document.id == Extraction.document_id)
+                .outerjoin(
+                    ValidationResult, ValidationResult.extraction_id == Extraction.id
+                )
+                .where(Extraction.organization_id == organization_id)
+                .order_by(Extraction.created_at.desc())
+                .limit(page_size)
+                .offset(offset)
+            )
+            if only_succeeded:
+                query = query.where(Extraction.status == "succeeded")
+            if since is not None:
+                query = query.where(Extraction.created_at >= since)
+            if until is not None:
+                query = query.where(Extraction.created_at <= until)
+            if batch_id is not None:
+                query = query.where(Document.batch_id == batch_id)
+
+            rows = (await self.session.execute(query)).all()
+            if not rows:
+                return
+            for row in rows:
+                yield row[0], row[1], row[2]
+            if len(rows) < page_size:
+                return
+            offset += page_size

@@ -33,6 +33,7 @@ class Document(Base):
         ID, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     request_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(ID, nullable=True, index=True)
 
     filename: Mapped[str] = mapped_column(String(400), nullable=False)
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)

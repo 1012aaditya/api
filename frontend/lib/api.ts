@@ -149,3 +149,50 @@ export async function apiUpload<T>(path: string, file: File): Promise<T> {
   form.append("file", file);
   return (await call(path, { method: "POST", body: form })) as T;
 }
+
+/** Bulk upload: many files under the same `files` field. */
+export async function apiUploadMany<T>(
+  path: string,
+  files: File[],
+  extra: Record<string, string> = {},
+): Promise<T> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  for (const [key, value] of Object.entries(extra)) form.append(key, value);
+  return (await call(path, { method: "POST", body: form })) as T;
+}
+
+/**
+ * Download a file that needs the Authorization header.
+ *
+ * A plain <a href> cannot carry a bearer token, so the body is fetched and
+ * handed to the browser as a blob. Large exports stream on the wire but are
+ * assembled in memory here — fine for a spreadsheet, not for a gigabyte.
+ */
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const payload = (await parse(response)) as { error?: ApiError } | null;
+    throw new ApiRequestError(
+      response.status,
+      payload?.error ?? { code: "export_failed", message: "The export failed." },
+      response.headers.get("X-Request-Id"),
+    );
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}

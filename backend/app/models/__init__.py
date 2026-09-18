@@ -2,6 +2,7 @@
 
 from app.db.base import Base
 from app.models.api_key import APIKey
+from app.models.batch import DocumentBatch
 from app.models.document import Document, DocumentStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.extraction_job import ExtractionJob, JobStatus
@@ -16,6 +17,7 @@ __all__ = [
     "Base",
     "DeliveryStatus",
     "Document",
+    "DocumentBatch",
     "DocumentStatus",
     "Extraction",
     "ExtractionJob",

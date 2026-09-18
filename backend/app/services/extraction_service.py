@@ -26,6 +26,7 @@ from app.db.base import utcnow
 from app.db.session import get_session_factory
 from app.models import (
     Document,
+    DocumentBatch,
     DocumentStatus,
     Extraction,
     ExtractionJob,
@@ -36,6 +37,7 @@ from app.models import (
 from app.pipelines.invoice_pipeline import ExtractionPipeline, PipelineResult, headline_flags
 from app.providers.base import DocumentAIProvider
 from app.providers.registry import get_provider
+from app.repositories.batches import BatchRepository
 from app.repositories.documents import DocumentRepository
 from app.repositories.extractions import ExtractionRepository
 from app.repositories.jobs import JobRepository
@@ -225,9 +227,32 @@ class ExtractionService:
             )
             raise
 
+        job = await self._queue_one(
+            auth=auth, file=file, request_id=request_id, endpoint=endpoint, now=now
+        )
+        await self._db.commit()
+        return job
+
+    async def _queue_one(
+        self,
+        *,
+        auth: AuthContext,
+        file: ValidatedFile,
+        request_id: str,
+        endpoint: str,
+        now: dt.datetime,
+        batch_id: str | None = None,
+    ) -> ExtractionJob:
+        """Store one already-validated file and queue it. Does not commit.
+
+        Shared by single and bulk submission so the two cannot drift on what
+        queueing a document means.
+        """
+        settings = auth.settings
         document = await self._persist_document(
             auth, file, request_id=request_id, now=now, force_store=True
         )
+        document.batch_id = batch_id
         job = await JobRepository(self._db).create(
             organization_id=auth.organization_id,
             document_id=document.id,
@@ -235,6 +260,7 @@ class ExtractionService:
             api_key_id=auth.api_key_id,
             max_attempts=settings.job_max_attempts,
         )
+        job.batch_id = batch_id
 
         await emit_event(
             self._db,
@@ -259,16 +285,149 @@ class ExtractionService:
             billable=False,
             pages=file.page_count,
         )
-        await self._db.commit()
-
         logger.info(
             "job.submitted",
             organization_id=auth.organization_id,
             job_id=job.id,
             document_id=document.id,
+            batch_id=batch_id,
             pages=file.page_count,
         )
         return job
+
+    async def submit_batch(
+        self,
+        *,
+        auth: AuthContext,
+        uploads: list[UploadedFile],
+        request_id: str,
+        name: str | None = None,
+        endpoint: str = "/v1/batches",
+    ) -> tuple[DocumentBatch, list[ExtractionJob], list[dict[str, str]]]:
+        """Queue many documents at once.
+
+        One bad file does not fail the batch. Each is validated on its own,
+        the good ones are queued, and the rejected ones come back with the
+        reason — a folder of two hundred invoices where three are corrupt
+        should process a hundred and ninety-seven and say which three.
+        """
+        settings = auth.settings
+        now = utcnow()
+
+        # Configuration, not reachability: queueing work that can never run
+        # would just defer the same 503 across the whole batch.
+        try:
+            self._provider or get_provider()
+        except ProviderUnavailableError:
+            await self._record_usage_out_of_band(
+                auth=auth, endpoint=endpoint, request_id=request_id,
+                status_code=503, error_code="extraction_provider_unavailable",
+                billable=False, pages=0,
+            )
+            raise
+
+        used = await UsageRepository(self._db).billable_count_this_month(
+            auth.organization_id, now=now
+        )
+        remaining = max(0, auth.monthly_document_quota - used)
+
+        batch = await BatchRepository(self._db).create(
+            organization_id=auth.organization_id, name=name, request_id=request_id
+        )
+
+        jobs: list[ExtractionJob] = []
+        rejected: list[dict[str, str]] = []
+
+        for upload in uploads:
+            if len(jobs) >= remaining:
+                # Stop at the allowance rather than queueing work that will be
+                # refused later. The caller is told exactly which files these are.
+                rejected.append(
+                    {
+                        "filename": upload.filename,
+                        "code": "quota_exceeded",
+                        "message": (
+                            f"Monthly quota of {auth.monthly_document_quota} documents "
+                            f"would be exceeded; {remaining} remained when this batch "
+                            "was submitted."
+                        ),
+                    }
+                )
+                continue
+            try:
+                file = validate_upload(
+                    upload.content,
+                    filename=upload.filename,
+                    max_size_bytes=settings.max_file_size_bytes,
+                    max_page_count=settings.max_page_count,
+                )
+            except DocuParseError as exc:
+                rejected.append(
+                    {
+                        "filename": upload.filename,
+                        "code": exc.code,
+                        "message": exc.message,
+                    }
+                )
+                continue
+
+            jobs.append(
+                await self._queue_one(
+                    auth=auth,
+                    file=file,
+                    request_id=request_id,
+                    endpoint=endpoint,
+                    now=now,
+                    batch_id=batch.id,
+                )
+            )
+
+        batch.document_count = len(jobs)
+        batch.rejected_count = len(rejected)
+
+        if rejected:
+            await self._record_usage_in_session(
+                auth=auth,
+                endpoint=endpoint,
+                request_id=request_id,
+                status_code=207 if jobs else 400,
+                error_code="batch_partially_rejected",
+                pages=0,
+            )
+
+        await self._db.commit()
+        logger.info(
+            "batch.submitted",
+            organization_id=auth.organization_id,
+            batch_id=batch.id,
+            accepted=len(jobs),
+            rejected=len(rejected),
+        )
+        return batch, jobs, rejected
+
+    async def _record_usage_in_session(
+        self,
+        *,
+        auth: AuthContext,
+        endpoint: str,
+        request_id: str,
+        status_code: int,
+        error_code: str,
+        pages: int,
+    ) -> None:
+        """Record a non-billable event on the caller's own session."""
+        await UsageRepository(self._db).record(
+            organization_id=auth.organization_id,
+            api_key_id=auth.api_key_id,
+            request_id=request_id,
+            endpoint=endpoint,
+            event_type=auth.usage_event_type,
+            status_code=status_code,
+            success=False,
+            billable=False,
+            pages=pages,
+            error_code=error_code,
+        )
 
     async def process_job(self, job: ExtractionJob, *, settings: Settings) -> bool:
         """Run one claimed job. Returns True if it completed successfully.

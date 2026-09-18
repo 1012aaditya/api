@@ -122,7 +122,7 @@ confidence and a copy-pasteable cURL command.
 ### 7. Run the tests
 
 ```bash
-make test           # 311 backend tests, no services required
+make test           # 326 backend tests, no services required
 make lint
 make test-web       # typecheck + browser smoke check (needs both servers up)
 ```
@@ -311,6 +311,10 @@ Consistent envelope, stable codes, no stack traces and no provider details:
 | `POST` | `/v1/invoices/extract` | API key | **Extract a GST invoice, synchronously.** |
 | `POST` | `/v1/documents` | API key | **Submit for background extraction.** Returns a job id. |
 | `GET` | `/v1/jobs` · `/v1/jobs/{id}` | either | Job state: queued / processing / completed / failed. |
+| `POST` | `/v1/batches` | either | **Submit up to 200 files at once.** Unreadable files are listed, not dropped. |
+| `GET` | `/v1/batches` · `/v1/batches/{id}` | either | Batch progress, counted from the jobs themselves. |
+| `GET` | `/v1/exports/invoices.csv` | either | Streaming CSV, one row per invoice. |
+| `GET` | `/v1/exports/line-items.csv` | either | Streaming CSV, one row per line item. |
 | `GET` | `/v1/documents` | API key | List your documents. |
 | `GET` | `/v1/documents/{id}` | API key | One document's metadata. |
 | `DELETE` | `/v1/documents/{id}` | API key | Delete the stored bytes now. |
@@ -461,6 +465,96 @@ answer, so a retry would only cost money (§34). Nothing here can loop forever.
 A submission is not billable; the worker's attempt is. Refusing a document for
 its type or size costs nothing and is recorded but not billed.
 
+---
+
+## Bulk upload and CSV export
+
+A month of purchase invoices is a folder, not a document. `POST /v1/batches`
+takes up to `MAX_BATCH_FILES` (default 200) in one multipart request, queues
+them on the same job queue as `/v1/documents`, and returns immediately:
+
+```bash
+curl -X POST https://api.docuparse.example/v1/batches \
+  -H "Authorization: Bearer $DOCUPARSE_API_KEY" \
+  -F "name=September purchases" \
+  -F "files=@inv-001.pdf" -F "files=@inv-002.pdf" -F "files=@notes.gif"
+```
+
+```json
+{
+  "success": true,
+  "request_id": "req_01M2…",
+  "batch_id": "bat_01M2V5TG5DX6B9EE970GX7AQGW",
+  "accepted": 2,
+  "job_ids": ["job_01M2…", "job_01M2…"],
+  "rejected": [
+    {
+      "filename": "notes.gif",
+      "code": "unsupported_file_type",
+      "message": "Only PDF, PNG, JPG and JPEG files are supported. The uploaded file's contents did not match any of them."
+    }
+  ]
+}
+```
+
+**A file we cannot read is reported, not dropped.** One bad scan does not fail
+the other 199, and it does not disappear either — it comes back named, with the
+reason, so you know exactly what to re-send. The same is true of the quota: if
+the batch would cross your monthly allowance, the files that fit are queued and
+the rest are returned as `rejected` with `quota_exceeded`, naming each one.
+
+`GET /v1/batches/{id}` reports progress. The counts are derived by grouping over
+the batch's jobs, not stored on the batch row — a counter that has to be updated
+in step with the jobs is a counter that will eventually disagree with them.
+
+```json
+{
+  "success": true,
+  "request_id": "req_01M2…",
+  "data": {
+    "id": "bat_01M2V5TG5DX6B9EE970GX7AQGW",
+    "name": "September purchases",
+    "document_count": 199,
+    "rejected_count": 1,
+    "total": 199,
+    "queued": 4,
+    "processing": 1,
+    "completed": 194,
+    "failed": 0,
+    "done": false,
+    "created_at": "2025-09-18T09:14:22Z"
+  }
+}
+```
+
+### Export
+
+Results come back as CSV, streamed row by row so a 10,000-invoice export does
+not have to fit in memory:
+
+```bash
+curl -G https://api.docuparse.example/v1/exports/invoices.csv \
+  -H "Authorization: Bearer $DOCUPARSE_API_KEY" \
+  -d from=2025-09-01 -d to=2025-09-30 -o september.csv
+```
+
+`invoices.csv` is one row per invoice (35 columns: the header fields, both
+parties, the tax split, the validation verdict and the confidence).
+`line-items.csv` is one row per line, carrying its invoice number so the two
+join. Both accept `from`, `to` and `batch_id`; the window is capped at 400 days.
+
+Two details that matter more than they look:
+
+- **A null is an empty cell, never the string `None`.** A spreadsheet formula
+  over `None` silently produces nonsense; over an empty cell it produces an
+  empty cell. Where a field was not on the invoice, the column is blank.
+- **The file starts with a UTF-8 BOM**, because Excel otherwise reads
+  `₹` and Devanagari supplier names as mojibake. Google Sheets and pandas both
+  skip the BOM, so nothing else is affected.
+
+The dashboard's **Bulk upload** page is the same two endpoints with a drop zone
+in front of them.
+
 ## Webhooks
 
 Register an endpoint and stop polling:
@@ -548,6 +642,7 @@ free of gradients and animation.
 |---|---|
 | `/dashboard` | Requests, documents, success rate, average latency, a 30-day chart, quota, and the recent request log. |
 | `/playground` | Upload an invoice, run it synchronously or as a background job, and see the JSON, validation, per-field confidence, timing and a cURL command. |
+| `/batches` | Drop a folder of invoices in, watch the batch drain, and download the results as CSV. |
 | `/documents` | Everything uploaded, with per-document extraction results and one-click deletion. |
 | `/usage` | 7/30/90-day totals and the full request log, with the estimated provider cost per request. |
 | `/api-keys` | Create, rotate and revoke. The secret is shown once, at creation. |
@@ -730,14 +825,15 @@ a model change without a migration fails the suite rather than production.
 
 ### Tests
 
-311 backend tests covering authentication, API key lifecycle, file validation,
+326 backend tests covering authentication, API key lifecycle, file validation,
 the invoice schema, GSTIN validation, invoice and line-item arithmetic, the
 extraction response, missing fields, malformed files, rate limiting, quota,
 tenant isolation, webhook signatures, provider retry and failure handling,
 retention, usage reporting, log redaction, async job lifecycle and retry
 policy, worker claim semantics, webhook signing and replay resistance, delivery
 retries and backoff, the SSRF guard on webhook destinations, QR and text-layer
-extraction, tier routing and escalation, and cross-source conflict reporting.
+extraction, tier routing and escalation, cross-source conflict reporting,
+bulk-upload partial acceptance, and CSV export escaping and null handling.
 
 The dashboard is checked by `frontend/scripts/smoke.mjs`, which drives a real
 browser against a running stack (`npx playwright install chromium` once, then

@@ -261,3 +261,32 @@ export interface DeliverySummary {
   created_at: string;
   payload: Record<string, unknown>;
 }
+
+export interface RejectedFile {
+  filename: string;
+  code: string;
+  message: string;
+}
+
+export interface BatchAccepted {
+  success: boolean;
+  request_id: string;
+  batch_id: string;
+  accepted: number;
+  rejected: RejectedFile[];
+  job_ids: string[];
+}
+
+export interface BatchProgress {
+  id: string;
+  name: string | null;
+  document_count: number;
+  rejected_count: number;
+  total: number;
+  queued: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  done: boolean;
+  created_at: string;
+}

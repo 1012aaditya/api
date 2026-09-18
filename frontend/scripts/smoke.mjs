@@ -89,6 +89,7 @@ try {
   console.log("pages load");
   for (const [path, marker] of [
     ["/playground", "Run extraction"],
+    ["/batches", "New batch"],
     ["/documents", "Uploads"],
     ["/usage", "Request log"],
     ["/api-keys", "Create a key"],

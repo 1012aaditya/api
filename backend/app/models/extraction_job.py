@@ -49,6 +49,7 @@ class ExtractionJob(Base):
     )
     extraction_id: Mapped[str | None] = mapped_column(ID, nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(ID, nullable=True, index=True)
 
     document_type: Mapped[str] = mapped_column(
         String(60), nullable=False, default="gst_invoice", server_default=text("'gst_invoice'")

@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # --- Upload limits ---
     max_file_size_bytes: int = 20 * 1024 * 1024
     max_page_count: int = 25
+    # Files accepted in one bulk upload. A cap, because the whole batch
+    # arrives as a single multipart body held in memory.
+    max_batch_files: int = 200
 
     # --- Retention ---
     document_retention_days: int = 7

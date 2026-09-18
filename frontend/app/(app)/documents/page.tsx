@@ -13,7 +13,7 @@ import {
   PageHeader,
   Spinner,
 } from "@/components/ui";
-import { ApiRequestError, apiDelete, apiGet } from "@/lib/api";
+import { ApiRequestError, apiDelete, apiDownload, apiGet } from "@/lib/api";
 import { bytes, relativeTime } from "@/lib/format";
 import type { DocumentSummary } from "@/lib/types";
 
@@ -37,6 +37,15 @@ export default function DocumentsPage() {
     void load();
   }, [load]);
 
+  async function exportCsv(kind: "invoices" | "line-items") {
+    try {
+      await apiDownload(`/v1/exports/${kind}.csv`, `${kind}.csv`);
+    } catch (caught) {
+      if (caught instanceof ApiRequestError) setError(caught);
+      else throw caught;
+    }
+  }
+
   async function remove(id: string) {
     if (
       !window.confirm(
@@ -59,6 +68,12 @@ export default function DocumentsPage() {
       <PageHeader
         title="Documents"
         description="Everything you have uploaded. Files are deleted automatically when their retention window expires."
+        action={
+          <div className="flex gap-2">
+            <Button onClick={() => void exportCsv("invoices")}>Export invoices</Button>
+            <Button onClick={() => void exportCsv("line-items")}>Export line items</Button>
+          </div>
+        }
       />
 
       {error && (

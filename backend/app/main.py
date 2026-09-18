@@ -23,7 +23,17 @@ Every response carries a `request_id` — quote it in support requests.
 
 
 def _build_v1_router() -> APIRouter:
-    from app.api.v1 import api_keys, auth, documents, invoices, jobs, usage, webhooks
+    from app.api.v1 import (
+        api_keys,
+        auth,
+        batches,
+        documents,
+        exports,
+        invoices,
+        jobs,
+        usage,
+        webhooks,
+    )
 
     router = APIRouter(prefix="/v1")
     router.include_router(auth.router)
@@ -32,6 +42,8 @@ def _build_v1_router() -> APIRouter:
     router.include_router(documents.router)
     router.include_router(usage.router)
     router.include_router(jobs.router)
+    router.include_router(batches.router)
+    router.include_router(exports.router)
     router.include_router(webhooks.router)
     return router
 
