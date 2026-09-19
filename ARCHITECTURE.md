@@ -193,6 +193,25 @@ for showing rather than testing.
 * **Both list pages page**, because the brief's own 50–500 clients would
   otherwise have silently shown the first two hundred.
 
+### The planner (after the twelve days)
+
+`app/services/planner.py` is the only component allowed to decide anything
+with a model. Its shape is the point:
+
+* one case in, no identifiers, one action out of five;
+* the answer is validated before it is acted on, and a rejected plan is
+  recorded with its reason rather than hidden;
+* execution goes through the same services as the deterministic path, so the
+  policy gate, the caps and the state machines apply unchanged;
+* anything going wrong — no model, a timeout, prose instead of JSON — falls
+  back to the ladder that ran before it existed.
+
+`app/services/ai_policy.py` is what makes "keep documents on your own
+hardware" true. A model endpoint is local or it is not; a hostname that
+cannot be shown to be local is treated as remote. Enforced in two places that
+matter: before a document is sent for extraction, and before a case is sent
+to the planner.
+
 ### Not done, and worth saying plainly
 
 * No AI provider key exists in this environment, so extraction has only ever
@@ -200,8 +219,12 @@ for showing rather than testing.
   claimed (§30, §33).
 * `docker compose up` has never been executed here — the registry is blocked
   from this container. The files are written and reviewed, not run.
-* No WhatsApp message from this code has been watched arriving on a phone.
-  The adapter is written and unit-tested; a scripted transport is not Meta.
+* No WhatsApp message from this code has been watched arriving on a phone,
+  and no Exotel call has been listened to. Both adapters are written and
+  unit-tested; a scripted transport is not a telco.
+* No model has run against the planner outside the tests. The prompts are
+  written and the guard rails are tested against scripted answers; how a
+  real 7B model behaves on a real case is unmeasured.
 * The PostgreSQL test-harness flake in §6b is still unexplained. It did not
   reproduce in three consecutive full runs against PostgreSQL at the end of
   this work, which is evidence of nothing except that it is intermittent.

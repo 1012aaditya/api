@@ -471,6 +471,50 @@ including Hinglish, because that is what people actually write:
 | "mujhe samajh nahi aa raha" | a question | a task for a person; the agent does not explain tax |
 | "mat bhejo message" | do not contact | automation off for that client, an exception for the firm, queued work cancelled |
 
+### What the agent decides for itself
+
+With a model configured, the agent does not simply walk a fixed schedule. It
+reads the case — what is missing, what the client last said, how close the
+deadline is, how many times they have been asked — and picks one of five
+things: send a message it writes itself, wait, hand the case to a person,
+raise a task, or do nothing. A client who says "thoda time do, audit chal
+raha hai" gets a week, not another reminder tomorrow, and gets it in the
+language they wrote in.
+
+That is the only place in this product where a model decides anything, and it
+is fenced in:
+
+* **It sees one case, and no identifiers.** It cannot name another firm's
+  client however it is prompted, because no id goes in or comes out.
+* **Its message is checked before it is sent.** A draft that implies a
+  document was received, asks for something the firm already has, carries a
+  link, or is too long is thrown away — and the deterministic reminder goes
+  instead. The suggestion and the reason it was refused both land on the
+  timeline.
+* **It cannot get past the policy.** Opt-outs, the daily cap and quiet hours
+  are checked after the decision, not before it. A plan is a suggestion; the
+  cap is not.
+* **It cannot fail quietly.** No model configured, a model that is down, a
+  model that answers with prose instead of JSON — all of them fall back to
+  the fixed ladder. There is no path where a model having a bad day means a
+  client is not chased.
+
+Switch it off per firm on the Agent page and the fixed schedule runs, exactly
+as it did before any of this existed.
+
+Before letting it near a real client list, ask it what it would do:
+
+```bash
+curl -X POST http://localhost:8000/v1/agent/run \
+  -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' \
+  -d '{"dry_run": true}'
+# → {"scheduled": 8, "sent": 0,
+#    "skipped": ["would chase Marigold Retail Pvt Ltd for bank statement and gstr-2b", ...]}
+```
+
+Nothing is queued and nothing is sent; the database is left exactly as it was
+found. The dashboard has the same thing as a button.
+
 When a file arrives, it is classified from what it says — "Statement of
 Account", an IFSC code, opening and closing balances — and the evidence is
 kept, so the firm can see *why* it was read that way. A document the
@@ -550,9 +594,33 @@ Two WhatsApp rules are worth knowing before you do:
   they did. Without a template configured, the refusal simply stands and the
   firm sees why.
 
-Voice is the same shape: the interface, the script and the escalation path are
-built and tested, and the adapter for an actual telephony account is not
-written. `VOICE_PROVIDER=mock` is likewise refused in production.
+### Connecting a phone line
+
+```bash
+VOICE_PROVIDER=exotel
+EXOTEL_SID=...            EXOTEL_API_KEY=...       EXOTEL_API_TOKEN=...
+EXOTEL_CALLER_ID=...      # the ExoPhone, not anyone's mobile
+EXOTEL_FLOW_ID=...        # the App that speaks when the client answers
+EXOTEL_REGION=in          # or sg
+```
+
+**One thing to understand before you switch this on.** Exotel does not speak
+text this software sends it. A call connects your client to a *flow* you
+build in the Exotel dashboard, and that flow is what talks. The script in
+`app/services/voice.py` is what the firm intended to say; it is sent along as
+a custom field and kept on the call record, but it is not a transcript.
+
+That matters for one sentence in particular. A call from a machine must say
+so, immediately — **and your Exotel flow has to be the thing that says it.**
+This code cannot check that it does. Build the flow to open with something
+like *"Hello, this is an automated assistant calling on behalf of Sharma &
+Associates about your GST documents"*, and confirm it yourself by calling
+your own number before pointing it at a client.
+
+Calls are off by default for every firm, and nothing here retries: a phone
+call placed twice because a response was slow is a real cost to a real
+person. `VOICE_PROVIDER=mock` is refused in production, same as WhatsApp.
+
 
 ---
 
@@ -1252,8 +1320,10 @@ Honest scope. These are designed for but not implemented:
   has been connected to it from here. A production deployment left on the mock
   is refused at startup rather than allowed to report messages as sent that
   nobody received.
-- **A real voice adapter** — the escalation path is built, no telephony
-  account is wired to it.
+- **A call anyone has listened to.** The Exotel adapter is written and tested
+  against a scripted transport; no Exotel account has been connected from
+  here, and the flow that does the talking is something you build on their
+  side.
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.
 - **A hosted endpoint.** `docker compose up` runs the whole stack on one

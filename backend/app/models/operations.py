@@ -325,9 +325,18 @@ class AgentPolicy(Base):
     classification_threshold: Mapped[str] = mapped_column(
         String(10), nullable=False, default="0.80", server_default=text("'0.80'")
     )
-    #: When true, no client data may leave the deployment (§19).
+    #: When true, no client data may leave the deployment (§19). A model
+    #: reached over the public internet is refused rather than used, and the
+    #: work waits for a person instead.
     local_ai_only: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
+    )
+    #: Whether a model may decide what to do next about a case, or only the
+    #: ladder may. Off means the deterministic rules run, exactly as they did
+    #: before there was a planner — which is also what happens when no model
+    #: is configured at all.
+    allow_ai_planning: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
     )
 
     #: Outside these hours the agent queues instead of sending. Nobody wants a

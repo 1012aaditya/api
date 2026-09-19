@@ -212,6 +212,7 @@ class AgentPolicyIn(BaseModel):
     voice_call_after_hours: int | None = Field(default=None, ge=1, le=720)
     classification_threshold: str | None = None
     local_ai_only: bool | None = None
+    allow_ai_planning: bool | None = None
     quiet_hours_start: int | None = Field(default=None, ge=0, le=23)
     quiet_hours_end: int | None = Field(default=None, ge=0, le=23)
 
@@ -230,6 +231,7 @@ class AgentPolicyOut(AgentPolicyIn):
     voice_call_after_hours: int
     classification_threshold: str
     local_ai_only: bool
+    allow_ai_planning: bool
     quiet_hours_start: int
     quiet_hours_end: int
 

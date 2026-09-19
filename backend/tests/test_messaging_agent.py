@@ -673,7 +673,11 @@ async def test_a_closed_window_falls_back_to_the_approved_template(
             messaging=messaging,
         )
         result = await agent.request_missing_documents(
-            await session.get(ComplianceCase, case.id), firm_name="Sharma & Associates"
+            await session.get(ComplianceCase, case.id),
+            firm_name="Sharma & Associates",
+            # Pinned: the firm's default quiet hours are 21:00-09:00, so a
+            # test that takes the wall clock passes or fails by time of day.
+            now=NOON,
         )
         await session.commit()
 
@@ -722,7 +726,11 @@ async def test_without_an_approved_template_the_refusal_stands(
             messaging=messaging,
         )
         result = await agent.request_missing_documents(
-            await session.get(ComplianceCase, case.id), firm_name="Sharma & Associates"
+            await session.get(ComplianceCase, case.id),
+            firm_name="Sharma & Associates",
+            # Pinned: the firm's default quiet hours are 21:00-09:00, so a
+            # test that takes the wall clock passes or fails by time of day.
+            now=NOON,
         )
         await session.commit()
 
@@ -756,7 +764,11 @@ async def test_a_template_that_also_fails_is_not_reported_as_sent(
             messaging=messaging,
         )
         result = await agent.request_missing_documents(
-            await session.get(ComplianceCase, case.id), firm_name="Sharma & Associates"
+            await session.get(ComplianceCase, case.id),
+            firm_name="Sharma & Associates",
+            # Pinned: the firm's default quiet hours are 21:00-09:00, so a
+            # test that takes the wall clock passes or fails by time of day.
+            now=NOON,
         )
         await session.commit()
 

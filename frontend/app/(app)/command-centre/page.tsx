@@ -42,6 +42,7 @@ export default function CommandCentrePage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<AgentRunResult | null>(null);
+  const [previewed, setPreviewed] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -70,13 +71,17 @@ export default function CommandCentrePage() {
     void load();
   }, [load]);
 
-  async function runAgent() {
+  async function runAgent(dryRun = false) {
     setRunning(true);
     setRunResult(null);
     setError(null);
+    setPreviewed(dryRun);
     try {
-      setRunResult(await apiSend<AgentRunResult>("/v1/agent/run", {}));
-      await load();
+      setRunResult(
+        await apiSend<AgentRunResult>("/v1/agent/run", { dry_run: dryRun }),
+      );
+      // A preview changed nothing, so there is nothing to reload.
+      if (!dryRun) await load();
     } catch (caught) {
       if (caught instanceof ApiRequestError) setError(caught);
       else throw caught;
@@ -99,9 +104,18 @@ export default function CommandCentrePage() {
         title="Today"
         description="What is blocked, what needs a person, and what the agent has been doing."
         action={
-          <Button variant="primary" onClick={() => void runAgent()} disabled={running}>
-            {running ? "Working…" : "Chase what needs chasing"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void runAgent(true)} disabled={running}>
+              Show me what it would do
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => void runAgent(false)}
+              disabled={running}
+            >
+              {running ? "Working…" : "Chase what needs chasing"}
+            </Button>
+          </div>
         }
       />
 
@@ -119,19 +133,26 @@ export default function CommandCentrePage() {
         <Card className="mb-6 px-5 py-4">
           <p className="text-sm text-ink">
             {runResult.scheduled === 0 && runResult.sent === 0
-              ? "Nothing needed chasing."
-              : `${runResult.scheduled} follow-up${
-                  runResult.scheduled === 1 ? "" : "s"
-                } queued.`}{" "}
+              ? "Nothing needs chasing."
+              : previewed
+                ? `It would chase ${runResult.scheduled} client${
+                    runResult.scheduled === 1 ? "" : "s"
+                  }.`
+                : `${runResult.scheduled} follow-up${
+                    runResult.scheduled === 1 ? "" : "s"
+                  } queued.`}{" "}
             <span className="text-ink-2">
-              The agent sends each one when it comes due, so pressing this does
-              not message everybody at once.
+              {previewed
+                ? "Nothing has been queued and nothing has been sent — this is only what it would do."
+                : "The agent sends each one when it comes due, so pressing this does not message everybody at once."}
             </span>
           </p>
           {runResult.skipped.length > 0 && (
             <ul className="mt-2 space-y-1 text-sm text-ink-2">
               {runResult.skipped.map((reason) => (
-                <li key={reason}>Held back: {reason}</li>
+                <li key={reason}>
+                  {previewed ? reason : `Held back: ${reason}`}
+                </li>
               ))}
             </ul>
           )}

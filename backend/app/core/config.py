@@ -91,6 +91,21 @@ class Settings(BaseSettings):
     whatsapp_webhook_secret: str | None = None
     voice_provider: str = "mock"
 
+    # --- Exotel (VOICE_PROVIDER=exotel) ---
+    #: The account SID, from the Exotel dashboard.
+    exotel_sid: str | None = None
+    exotel_api_key: str | None = None
+    exotel_api_token: str | None = None
+    #: The ExoPhone the client sees as the caller. Not the CA's mobile.
+    exotel_caller_id: str | None = None
+    #: The App (flow) that speaks when the client picks up. Exotel plays a
+    #: flow you build in their dashboard — this code cannot put words in that
+    #: call, so the flow itself has to open by saying it is an AI assistant
+    #: calling on the firm's behalf. See the README.
+    exotel_flow_id: str | None = None
+    #: "in" for the Mumbai cluster, "sg" for Singapore.
+    exotel_region: str = "in"
+
     # --- WhatsApp Cloud API (WHATSAPP_PROVIDER=whatsapp_cloud) ---
     #: The sending number's id in the WhatsApp Business account, not the
     #: number itself.

@@ -77,6 +77,17 @@ async def drain(settings, *, now: dt.datetime) -> int:
     return ran
 
 
+def in_working_hours(moment: dt.datetime) -> dt.datetime:
+    """The next 11:00 UTC at or after ``moment``.
+
+    The firm's quiet hours are 21:00-09:00, so a journey driven from the wall
+    clock sends nothing when the suite happens to run at night. A firm chases
+    its clients in the daytime; so does this test.
+    """
+    candidate = moment.replace(hour=11, minute=0, second=0, microsecond=0)
+    return candidate if candidate >= moment else candidate + dt.timedelta(days=1)
+
+
 async def statuses(tenant: Tenant, case_id: str) -> dict[str, str]:
     async with get_session_factory()() as session:
         rows = await RequirementRepository(session).for_case(tenant.organization_id, case_id)
@@ -153,7 +164,7 @@ async def test_the_whole_journey(
     assert whatsapp.sent == []
 
     # 6. A day later the worker sends the first ask. ---------------------
-    assert await drain(settings, now=start + dt.timedelta(hours=25)) == 1
+    assert await drain(settings, now=in_working_hours(start + dt.timedelta(hours=25))) == 1
     assert len(whatsapp.sent) == 1
     first = whatsapp.sent[0]
     assert first.to == PHONE

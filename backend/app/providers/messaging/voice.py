@@ -113,7 +113,32 @@ class VoiceUnavailableError(DocuParseError):
     status_code = 503
 
 
-_FACTORIES = {"mock": lambda _settings: MockVoiceProvider()}
+def _exotel(settings):
+    """Build the Exotel adapter, or say exactly what is missing."""
+    from app.providers.messaging.exotel import ExotelVoiceProvider
+
+    missing = [
+        name
+        for name, value in (
+            ("EXOTEL_SID", settings.exotel_sid),
+            ("EXOTEL_API_KEY", settings.exotel_api_key),
+            ("EXOTEL_API_TOKEN", settings.exotel_api_token),
+            ("EXOTEL_CALLER_ID", settings.exotel_caller_id),
+            ("EXOTEL_FLOW_ID", settings.exotel_flow_id),
+        )
+        if not value
+    ]
+    if missing:
+        raise VoiceUnavailableError(
+            f"VOICE_PROVIDER=exotel needs {', '.join(missing)}."
+        )
+    return ExotelVoiceProvider(settings)
+
+
+_FACTORIES = {
+    "mock": lambda _settings: MockVoiceProvider(),
+    "exotel": _exotel,
+}
 _instance: VoiceProvider | None = None
 
 

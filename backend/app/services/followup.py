@@ -46,9 +46,12 @@ from app.models import (
 )
 from app.repositories.agent_jobs import AgentJobRepository
 from app.repositories.clients import CaseRepository, ClientRepository, RequirementRepository
-from app.repositories.operations import AgentPolicyRepository
+from app.repositories.operations import AgentEventRepository, AgentPolicyRepository
 from app.repositories.organizations import OrganizationRepository
 from app.services.agent import AgentContext, ClientCommunicationAgent, describe_missing
+from app.services.ai_policy import model_allowed
+from app.services.messaging import SENT_ACTION
+from app.services.planner import Plan
 
 logger = get_logger("docuparse.followup")
 
@@ -92,6 +95,7 @@ class FollowUpEngine:
         self._cases = CaseRepository(db)
         self._clients = ClientRepository(db)
         self._requirements = RequirementRepository(db)
+        self._events = AgentEventRepository(db)
 
     # -- scheduling -----------------------------------------------------
 
@@ -101,8 +105,14 @@ class FollowUpEngine:
         *,
         attempt_number: int,
         now: dt.datetime | None = None,
+        in_hours: int | None = None,
     ) -> AgentJob | None:
-        """Queue the next rung of the ladder, or stop and hand over."""
+        """Queue the next rung of the ladder, or stop and hand over.
+
+        ``in_hours`` overrides the ladder's own spacing. It is how the planner
+        says "they are mid-audit, leave them a week" — a judgement the rule
+        cannot make, on a schedule the rule still bounds.
+        """
         moment = now or utcnow()
         policy = await AgentPolicyRepository(self._db).get_or_create(
             case.organization_id
@@ -114,6 +124,22 @@ class FollowUpEngine:
         if attempt_number > policy.max_followups_per_case:
             await self._hand_over(case, policy, now=moment)
             return None
+
+        if in_hours is not None:
+            due = moment + dt.timedelta(hours=in_hours)
+            return await self._jobs.schedule(
+                organization_id=case.organization_id,
+                client_id=case.client_id,
+                case_id=case.id,
+                type=AgentJobType.SEND_FOLLOWUP,
+                # Keyed on when it is due, not on which rung it is: a decided
+                # wait is not the ladder's next step and must not collide with
+                # the rung that has just run.
+                dedupe_key=f"followup:{case.id}:wait:{due.isoformat()}",
+                available_at=due,
+                payload={"attempt": attempt_number, "decided_wait_hours": in_hours},
+                attempt_number=attempt_number,
+            )
 
         hours, job_type = _next_delay(policy, attempt_number)
         if job_type == AgentJobType.PLACE_CALL and not policy.allow_voice_calls:
@@ -222,8 +248,25 @@ class FollowUpEngine:
 
         context = AgentContext(organization_id=case.organization_id)
         agent = ClientCommunicationAgent(self._db, context)
+
+        # Ask the planner what this case needs. It may decide the answer is
+        # not another reminder — and when there is no model, or it answers
+        # badly, the ladder below runs exactly as it always did.
+        plan = await self.decide(case, client, firm_name=firm_name, job=job, now=moment)
+        if plan is not None and plan.rejected is None and plan.action != "send_message":
+            return await self._carry_out(
+                plan, case=case, client=client, agent=agent, job=job, now=moment
+            )
+
         outcome = await agent.request_missing_documents(
-            case, firm_name=firm_name, now=moment
+            case,
+            firm_name=firm_name,
+            now=moment,
+            body=(
+                plan.message
+                if plan is not None and plan.rejected is None and plan.action == "send_message"
+                else None
+            ),
         )
         if outcome.messages_sent:
             result.sent += 1
@@ -237,6 +280,150 @@ class FollowUpEngine:
             # ladder would spend a reminder nobody received, and dropping the
             # job would leave a blocked client nobody is chasing.
             result.retry_in_seconds = outcome.retry_in_seconds
+        return result
+
+    # -- the planner -----------------------------------------------------
+
+    async def decide(
+        self,
+        case: ComplianceCase,
+        client: Client,
+        *,
+        firm_name: str,
+        job: AgentJob | None = None,
+        now: dt.datetime | None = None,
+    ) -> Plan | None:
+        """What does this case need? None means "let the rules decide".
+
+        Returns a rejected plan rather than None when the model answered and
+        the answer was unusable, so the caller can record why — a planner that
+        quietly does nothing is one nobody can debug or trust.
+        """
+        from app.services import planner as planning
+
+        moment = now or utcnow()
+        policy = await AgentPolicyRepository(self._db).get_or_create(case.organization_id)
+        if not policy.allow_ai_planning:
+            return None
+
+        allowed, reason = await model_allowed(
+            self._db, case.organization_id, settings=self._settings
+        )
+        if not allowed:
+            # The firm asked for local-only and the model is not local. The
+            # ladder still chases them; only the reasoning is given up.
+            logger.info("planner.skipped_remote_model", case_id=case.id)
+            await self._events.record(
+                organization_id=case.organization_id,
+                client_id=client.id,
+                case_id=case.id,
+                action="agent.planning_skipped",
+                summary="Planned by the rules: the configured model is not local",
+                details={"reason": reason},
+            )
+            return None
+
+        sent_today = await self._events.count_since(
+            case.organization_id,
+            SENT_ACTION,
+            since=moment.replace(hour=0, minute=0, second=0, microsecond=0),
+        )
+        snapshot = await planning.build_snapshot(
+            self._db,
+            case=case,
+            client=client,
+            firm_name=firm_name,
+            policy=policy,
+            messages_left_today=max(0, policy.max_messages_per_day - sent_today),
+            default_action="send_message",
+            reminders_sent=(job.attempt_number - 1) if job else 0,
+            now=moment,
+        )
+        plan = await planning.propose(snapshot, settings=self._settings)
+        if plan is None:
+            return None
+
+        if plan.rejected is not None:
+            # Kept on the timeline on purpose. The firm should be able to see
+            # that the model suggested something and what was wrong with it.
+            await self._events.record(
+                organization_id=case.organization_id,
+                client_id=client.id,
+                case_id=case.id,
+                action="agent.plan_rejected",
+                summary=f"Ignored the model's suggestion: {plan.rejected}",
+                details={
+                    "model": plan.model,
+                    "action": plan.action,
+                    "reasoning": plan.reasoning,
+                    "rejected": plan.rejected,
+                },
+            )
+            return plan
+
+        await self._events.record(
+            organization_id=case.organization_id,
+            client_id=client.id,
+            case_id=case.id,
+            action="agent.planned",
+            summary=f"Decided to {plan.action.replace('_', ' ')}: {plan.reasoning}",
+            details={
+                "model": plan.model,
+                "action": plan.action,
+                "reasoning": plan.reasoning,
+                "wait_hours": plan.wait_hours,
+                "tokens": plan.usage_tokens,
+            },
+        )
+        return plan
+
+    async def _carry_out(
+        self,
+        plan: Plan,
+        *,
+        case: ComplianceCase,
+        client: Client,
+        agent: ClientCommunicationAgent,
+        job: AgentJob,
+        now: dt.datetime,
+    ) -> FollowUpResult:
+        """Do what the plan says, through the same doors as everything else."""
+        result = FollowUpResult()
+        policy = await AgentPolicyRepository(self._db).get_or_create(case.organization_id)
+
+        if plan.action == "wait":
+            scheduled = await self.schedule_next(
+                case,
+                attempt_number=job.attempt_number,
+                now=now,
+                in_hours=plan.wait_hours or policy.first_reminder_hours,
+            )
+            result.scheduled += 1 if scheduled else 0
+            result.skipped.append(plan.reason or "waiting, as decided")
+            return result
+
+        if plan.action == "escalate":
+            await self._hand_over(case, policy, now=now)
+            result.escalated += 1
+            return result
+
+        if plan.action == "create_task":
+            await agent.create_task(
+                title=plan.task_title or f"Look at {client.display_name}",
+                description=plan.task_description,
+                client_id=client.id,
+                case_id=case.id,
+            )
+            # A task for a person does not end the chase, so the ladder
+            # continues behind it.
+            await self.schedule_next(
+                case, attempt_number=job.attempt_number + 1, now=now
+            )
+            result.scheduled += 1
+            return result
+
+        # do_nothing
+        result.skipped.append(plan.reason or "nothing was needed")
         return result
 
     async def _place_call(
@@ -360,8 +547,14 @@ async def sweep_cases_needing_chasing(
     *,
     now: dt.datetime | None = None,
     limit: int = 200,
+    dry_run: bool = False,
 ) -> FollowUpResult:
-    """Find blocked cases with nothing queued, and start their ladder."""
+    """Find blocked cases with nothing queued, and start their ladder.
+
+    ``dry_run`` answers "who would you chase?" without queueing anything —
+    the question a CA asks before letting this loose on their client list for
+    the first time.
+    """
     result = FollowUpResult()
     moment = now or utcnow()
     engine = FollowUpEngine(db)
@@ -383,8 +576,24 @@ async def sweep_cases_needing_chasing(
         )
         if not outstanding:
             continue
+
+        if dry_run:
+            client = await ClientRepository(db).get(organization_id, case.client_id)
+            pending = await AgentJobRepository(db).pending_for_case(
+                organization_id, case.id
+            )
+            if pending:
+                continue
+            name = client.display_name if client else "a client"
+            result.skipped.append(
+                f"would chase {name} for {describe_missing(outstanding)}"
+            )
+            result.scheduled += 1
+            continue
+
         job = await engine.start_chasing(case, now=moment)
         if job is not None:
             result.scheduled += 1
-    await db.flush()
+    if not dry_run:
+        await db.flush()
     return result

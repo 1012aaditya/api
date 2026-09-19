@@ -752,8 +752,15 @@ async def run_agent(
             data=AgentRunOut(scheduled=1 if job else 0, sent=0),
         )
 
-    result = await sweep_cases_needing_chasing(db, auth.organization_id)
-    await db.commit()
+    result = await sweep_cases_needing_chasing(
+        db, auth.organization_id, dry_run=payload.dry_run
+    )
+    if payload.dry_run:
+        # Nothing was queued, so nothing is committed. "Show me what you would
+        # do" has to leave the database exactly as it found it.
+        await db.rollback()
+    else:
+        await db.commit()
     return SuccessResponse(
         request_id=request_id,
         data=AgentRunOut(scheduled=result.scheduled, sent=result.sent, skipped=result.skipped),

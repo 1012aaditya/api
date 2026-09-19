@@ -508,6 +508,7 @@ export interface AgentPolicy {
   voice_call_after_hours: number;
   classification_threshold: string;
   local_ai_only: boolean;
+  allow_ai_planning: boolean;
   quiet_hours_start: number;
   quiet_hours_end: number;
 }

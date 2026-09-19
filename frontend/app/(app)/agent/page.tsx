@@ -197,8 +197,16 @@ export default function AgentPage() {
                 }
               />
               <Toggle
+                label="Let it decide, not just follow the ladder"
+                hint="With a model configured, it reads the case and picks what to do — chase, wait, or hand over — and writes the message in the client's own language. Off means the fixed reminder schedule, which is also what runs when no model is configured."
+                checked={policy.allow_ai_planning}
+                onChange={(allow_ai_planning) =>
+                  setPolicy({ ...policy, allow_ai_planning })
+                }
+              />
+              <Toggle
                 label="Keep documents on your own hardware"
-                hint="Refuse any AI provider that is not local. Extraction fails loudly rather than sending a client's papers outside."
+                hint="Refuse any model that is not on this machine or your own network. Extraction stops and waits for a person rather than sending a client's papers outside, and the agent falls back to the fixed schedule."
                 checked={policy.local_ai_only}
                 onChange={(local_ai_only) => setPolicy({ ...policy, local_ai_only })}
               />

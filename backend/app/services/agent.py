@@ -265,8 +265,15 @@ class ClientCommunicationAgent:
         *,
         firm_name: str,
         now: dt.datetime | None = None,
+        body: str | None = None,
     ) -> AgentResult:
-        """The core loop: find what is outstanding, ask for it, record it."""
+        """The core loop: find what is outstanding, ask for it, record it.
+
+        ``body`` replaces the composed wording — how the planner's message
+        gets sent. Everything around it is unchanged on purpose: the same
+        policy gate decides whether it may go, and the same rule marks the
+        requirements as asked-for only once it has.
+        """
         result = AgentResult()
 
         if case.status == CaseStatus.COMPLETED:
@@ -288,7 +295,7 @@ class ClientCommunicationAgent:
             result.skipped = "Automatic follow-up is switched off for this firm."
             return result
 
-        body = compose_request(firm_name=firm_name, case=case, missing=missing)
+        body = body or compose_request(firm_name=firm_name, case=case, missing=missing)
         attempt = await self._messaging.send_with_reason(
             client,
             body,

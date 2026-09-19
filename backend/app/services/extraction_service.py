@@ -50,6 +50,7 @@ from app.schemas.extraction import (
     ValidationCheck,
     ValidationSummary,
 )
+from app.services.ai_policy import model_allowed
 from app.services.file_validation import ValidatedFile, validate_upload
 from app.services.storage import ObjectStore, build_storage_key, get_object_store
 from app.services.webhooks import emit_event
@@ -461,6 +462,23 @@ class ExtractionService:
                 message=(
                     "The stored document was deleted before it could be processed."
                 ),
+                retryable=False,
+                settings=settings,
+            )
+            return False
+
+        # A firm that asked for local-only processing does not get its client's
+        # invoice posted to somebody's API because a worker happened to pick
+        # the job up (§19). The job fails with the reason, and the document
+        # waits for a person rather than quietly leaving the building.
+        allowed, reason = await model_allowed(
+            self._db, job.organization_id, settings=settings
+        )
+        if not allowed:
+            await self._fail_job(
+                job,
+                error_code="model_not_local",
+                message=reason or "The configured model is not local.",
                 retryable=False,
                 settings=settings,
             )

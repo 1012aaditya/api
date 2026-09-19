@@ -89,14 +89,14 @@ class OpenAICompatibleProvider(DocumentAIProvider):
                 ),
             },
         )
-        return await self._complete(
+        return await self.complete(
             messages=[{"role": "user", "content": content}], json_mode=False
         )
 
     async def analyze_image(self, page: PreparedPage, *, prompt: str) -> ProviderResult:
         content = _image_content([page])
         content.insert(0, {"type": "text", "text": prompt})
-        return await self._complete(
+        return await self.complete(
             messages=[{"role": "user", "content": content}], json_mode=False
         )
 
@@ -111,7 +111,7 @@ class OpenAICompatibleProvider(DocumentAIProvider):
         content = _image_content(document.pages)
         content.insert(0, {"type": "text", "text": user_prompt})
 
-        result = await self._complete(
+        result = await self.complete(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
@@ -144,9 +144,17 @@ class OpenAICompatibleProvider(DocumentAIProvider):
 
     # --- transport -----------------------------------------------------
 
-    async def _complete(
+    async def complete(
         self, *, messages: list[dict[str, Any]], json_mode: bool
     ) -> ProviderResult:
+        """One chat completion, with this adapter's retry and logging.
+
+        Public because the document pipeline is no longer the only caller:
+        the agent's planner reasons over a case with the same endpoint, the
+        same retry budget and the same usage accounting. Anything that talks
+        to a model goes through here, so there is one place that knows how to
+        fail.
+        """
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,

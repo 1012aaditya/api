@@ -434,6 +434,10 @@ async def test_the_worker_drains_both_queues(
     tenant: Tenant, whatsapp: MockWhatsAppProvider
 ) -> None:
     _client, case = await setup_blocked_case(tenant)
+    # run_once() takes the real clock, and the firm's default quiet hours are
+    # 21:00-09:00 — so without this the test passes by day and fails by night.
+    # Quiet hours have their own tests; this one is about the worker.
+    await policy_for(tenant, quiet_hours_start=0, quiet_hours_end=0)
     async with get_session_factory()() as session:
         await FollowUpEngine(session).start_chasing(
             await session.get(ComplianceCase, case.id), now=DAY0
