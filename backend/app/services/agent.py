@@ -424,7 +424,17 @@ class ClientCommunicationAgent:
                 },
                 source="agent",
                 confidence=str(reading.confidence),
-                expires_at=None,
+                # A promise has a shelf life. Without one it sits in the
+                # client's record for ever and every later decision is still
+                # being made on the strength of something they said in
+                # September — which is how one "kal bhej dunga" stalls a chase
+                # indefinitely.
+                expires_at=(
+                    dt.datetime.combine(when, dt.time(23, 59), tzinfo=dt.UTC)
+                    + dt.timedelta(days=2)
+                    if when
+                    else (now or utcnow()) + dt.timedelta(days=3)
+                ),
             )
             said = when.strftime("%d %b") if when else "soon"
             result.actions.append(f"{client.display_name} said they would send it by {said}")

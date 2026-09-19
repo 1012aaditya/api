@@ -27,6 +27,7 @@ from app.models import (
     DocumentType,
     ExceptionStatus,
     Message,
+    RequirementStatus,
     Task,
     TaskStatus,
 )
@@ -502,6 +503,24 @@ async def resolve_exception(
         note=payload.note,
         user_id=auth.user.id if auth.user else None,
     )
+
+    # A requirement this exception was holding goes back to being owed. It is
+    # not valid — the document that arrived did not satisfy it, which is why
+    # somebody was asked — and leaving it in review would mean the client's
+    # real document, when it comes, is turned away by a requirement that can
+    # never be settled again.
+    released = None
+    if item.requirement_id:
+        requirement = await RequirementRepository(db).get(
+            auth.organization_id, item.requirement_id
+        )
+        if requirement is not None and requirement.status == RequirementStatus.NEEDS_REVIEW:
+            requirement.move_to(
+                RequirementStatus.INVALID,
+                reason=payload.note or f"An exception was {payload.status}.",
+            )
+            requirement.received_document_id = None
+            released = requirement.label
     await AgentEventRepository(db).record(
         organization_id=auth.organization_id,
         client_id=item.client_id,
@@ -509,7 +528,10 @@ async def resolve_exception(
         actor_type=ActorType.USER,
         actor_id=auth.user.id if auth.user else None,
         action="exception.resolved",
-        summary=f"An exception was marked {payload.status}",
+        summary=(
+            f"An exception was marked {payload.status}"
+            + (f"; {released} is owed again" if released else "")
+        ),
         entity_type="exception",
         entity_id=item.id,
     )

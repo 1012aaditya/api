@@ -12,6 +12,7 @@ import datetime as dt
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.base import utcnow
 from app.models import (
     Client,
     ClientFact,
@@ -301,11 +302,21 @@ class ClientFactRepository:
         )
         return result.scalar_one_or_none()
 
-    async def all_for_client(self, organization_id: str, client_id: str) -> list[ClientFact]:
+    async def all_for_client(
+        self, organization_id: str, client_id: str, *, now: dt.datetime | None = None
+    ) -> list[ClientFact]:
+        """Everything still true about this client.
+
+        A fact with an expiry that has passed is not returned. "They promised
+        to send it tomorrow" is useful on the day and misleading a fortnight
+        later, and the agent reasons over whatever this gives it.
+        """
+        moment = now or utcnow()
         result = await self.session.execute(
             select(ClientFact).where(
                 ClientFact.organization_id == organization_id,
                 ClientFact.client_id == client_id,
+                or_(ClientFact.expires_at.is_(None), ClientFact.expires_at > moment),
             )
         )
         return list(result.scalars().all())

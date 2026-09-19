@@ -510,6 +510,7 @@ class ExtractionService:
                 pages=document.page_count,
                 started=started,
             )
+            await self._report_unreadable(job, document, reason=exc.message)
             return False
         except Exception as exc:  # noqa: BLE001 — the worker must survive
             logger.exception("job.unexpected_error", job_id=job.id)
@@ -533,6 +534,13 @@ class ExtractionService:
             result=result,
         )
         await JobRepository(self._db).mark_completed(job, extraction_id=extraction.id)
+
+        # Reading the invoice is only half the job when it belongs to a
+        # client's case. The checks that matter — is this GSTIN theirs, is this
+        # the right month, do the totals add up — run against the case, and
+        # until this call existed they never ran on anything a client sent in
+        # over WhatsApp.
+        await self._settle_requirement(document, file=file, result=result, settings=settings)
 
         if auth.retention_days <= 0:
             # Process-and-delete: async needs the bytes long enough to read
@@ -561,6 +569,94 @@ class ExtractionService:
             duration_ms=result.duration_ms,
         )
         return True
+
+    async def _report_unreadable(
+        self, job: ExtractionJob, document: Document, *, reason: str
+    ) -> None:
+        """Tell the firm when a client's document could not be read.
+
+        Only once the job has given up. Until this existed, a document that
+        arrived on WhatsApp and could not be read sat on the case as "received,
+        waiting to be read" for ever, and the only trace was a failed row in a
+        queue table nobody opens.
+        """
+        if document.case_id is None or job.status != JobStatus.FAILED:
+            return
+
+        from app.models import ExceptionType, Severity
+        from app.repositories.clients import ClientRepository
+        from app.repositories.operations import ExceptionRepository
+
+        client = (
+            await ClientRepository(self._db).get(
+                document.organization_id, document.client_id
+            )
+            if document.client_id
+            else None
+        )
+        name = client.display_name if client else "A client"
+        await ExceptionRepository(self._db).raise_exception(
+            organization_id=document.organization_id,
+            client_id=document.client_id,
+            case_id=document.case_id,
+            document_id=document.id,
+            type=ExceptionType.UNREADABLE_DOCUMENT,
+            severity=Severity.HIGH,
+            message=(
+                f"{name} sent {document.filename}, which could not be read: "
+                f"{reason} It is on the case, but nothing has checked it."
+            ),
+            dedupe_key=f"unreadable:{document.id}",
+            details={"reason": reason},
+        )
+        await self._db.commit()
+
+    async def _settle_requirement(
+        self,
+        document: Document,
+        *,
+        file: ValidatedFile,
+        result,
+        settings: Settings,
+    ) -> None:
+        """Put the extraction's findings against the case, if there is one."""
+        if document.case_id is None or document.client_id is None:
+            return
+
+        from app.pipelines.stages.preprocess import prepare_document
+        from app.repositories.clients import CaseRepository, ClientRepository
+        from app.services.ingestion import IngestionService, refresh_case_status
+
+        client = await ClientRepository(self._db).get(
+            document.organization_id, document.client_id
+        )
+        case = await CaseRepository(self._db).get(
+            document.organization_id, document.case_id
+        )
+        if client is None or case is None:
+            return
+
+        failed = str(result.validation.overall) == "failed"
+        summary = None
+        if failed:
+            broken = [
+                check.message
+                for check in result.validation.checks
+                if str(check.status) == "failed" and check.message
+            ]
+            summary = broken[0] if broken else "The document did not pass validation."
+
+        await IngestionService(self._db, settings=settings).ingest(
+            document=document,
+            file=file,
+            prepared=prepare_document(file),
+            client=client,
+            case=case,
+            invoice=result.invoice.model_dump(mode="json"),
+            validation_passed=not failed,
+            validation_summary=summary,
+        )
+        await refresh_case_status(self._db, case)
 
     async def _purge_document_bytes(self, document: Document) -> None:
         if document.storage_key is None:

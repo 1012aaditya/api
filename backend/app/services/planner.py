@@ -118,6 +118,8 @@ class CaseSnapshot:
     max_followups: int = 3
     messages_left_today: int = 0
     default_action: str = "send_message"
+    #: The date the firm is reasoning on, so a promise can be read as due.
+    today: dt.date | None = None
 
 
 SYSTEM_PROMPT = """You are the assistant of an Indian chartered accountancy firm. \
@@ -153,6 +155,36 @@ Reply with JSON only, in this shape:
 "message": "<only for send_message>", "wait_hours": <only for wait>, \
 "reason": "<for wait, escalate, do_nothing>", "task_title": "<for create_task>", \
 "task_description": "<for create_task>"}"""
+
+
+def _promise_line(snapshot: CaseSnapshot) -> str | None:
+    """Say whether a promise has come due, not just that one was made.
+
+    "They said they would send it" reads the same on the day and a week
+    later, and a model told only that will wait for ever.
+    """
+    fact = snapshot.facts.get("document_commitment_date")
+    if not isinstance(fact, dict):
+        return None
+    said = str(fact.get("said") or "").strip()
+    raw = fact.get("date")
+    if not raw:
+        return f'They said: "{said}" — with no date anyone could pin down.'
+
+    try:
+        promised = dt.date.fromisoformat(str(raw)[:10])
+    except ValueError:
+        return f'They said: "{said}".'
+
+    today = snapshot.today or dt.date.today()
+    if promised > today:
+        return f'They promised to send by {promised:%d %b}, which has not come yet.'
+    days = (today - promised).days
+    when = "today" if days == 0 else f"{days} day{'s' if days != 1 else ''} ago"
+    return (
+        f'They promised to send by {promised:%d %b} ({when}) and it has not '
+        f"arrived. They said: \"{said}\"."
+    )
 
 
 def _language_hint(language: str) -> str:
@@ -198,8 +230,12 @@ def render_user_prompt(snapshot: CaseSnapshot) -> str:
         )
     lines.append(f"Messages the firm may still send today: {snapshot.messages_left_today}")
 
-    if snapshot.facts:
-        lines.append("What the client has told us before: " + json.dumps(snapshot.facts))
+    promise = _promise_line(snapshot)
+    if promise:
+        lines.append(promise)
+    other = {k: v for k, v in snapshot.facts.items() if k != "document_commitment_date"}
+    if other:
+        lines.append("What the client has told us before: " + json.dumps(other))
 
     if snapshot.recent_messages:
         lines.append("")
@@ -265,7 +301,7 @@ async def build_snapshot(
     facts = {
         fact.key: fact.value
         for fact in await ClientFactRepository(db).all_for_client(
-            case.organization_id, client.id
+            case.organization_id, client.id, now=moment
         )
     }
 
@@ -288,6 +324,7 @@ async def build_snapshot(
         max_followups=policy.max_followups_per_case,
         messages_left_today=messages_left_today,
         default_action=default_action,
+        today=moment.date(),
     )
 
 

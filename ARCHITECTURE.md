@@ -212,6 +212,27 @@ cannot be shown to be local is treated as remote. Enforced in two places that
 matter: before a document is sent for extraction, and before a case is sent
 to the planner.
 
+### The seam between the two halves
+
+Found by running the whole thing against one realistic case, which is the
+only way it could have been found: **the operations half and the extraction
+half had never been introduced to each other.** A document arriving on
+WhatsApp was classified, attached to a requirement and marked complete
+without ever being read; the extraction pipeline read invoices but never
+attached them to a case. Every check that stops one client's paperwork
+reaching another's books lived on the second path, so documents arriving the
+way the product says they arrive were checked by nothing.
+
+Three joins fixed it:
+
+1. `IngestionService.ingest` will not call an invoice-like requirement
+   complete with no invoice data — it stays `received`.
+2. `InboundService._handle_document` queues an extraction job for an
+   invoice-like document, where it arrived.
+3. `ExtractionService.process_job` hands its result back to the case, so the
+   GSTIN, period and totals checks run, and a document nothing could read
+   raises an exception rather than sitting in limbo.
+
 ### Not done, and worth saying plainly
 
 * No AI provider key exists in this environment, so extraction has only ever

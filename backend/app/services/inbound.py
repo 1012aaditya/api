@@ -29,11 +29,13 @@ from app.models import (
     Client,
     ComplianceCase,
     Document,
+    DocumentType,
     Message,
     Severity,
 )
 from app.providers.messaging.base import InboundMessage
 from app.repositories.clients import CaseRepository, ClientRepository
+from app.repositories.jobs import JobRepository
 from app.repositories.operations import AgentEventRepository, ExceptionRepository
 from app.services.agent import AgentContext, ClientCommunicationAgent
 from app.services.file_validation import validate_upload
@@ -215,6 +217,22 @@ class InboundService:
             client=client,
             case=case,
         )
+        # An invoice has to be read before anything says its requirement is
+        # met, and reading it is the extraction pipeline's job. Queue it here,
+        # where the document arrived, rather than leaving the two halves of
+        # this product unaware of each other.
+        if (
+            document.classified_type in DocumentType.INVOICE_LIKE
+            and outcome.requirement is not None
+        ):
+            await JobRepository(self._db).create(
+                organization_id=client.organization_id,
+                document_id=document.id,
+                request_id=None,
+                document_type=document.classified_type,
+            )
+            outcome.steps.append("Queued for reading")
+
         if case is not None:
             await refresh_case_status(self._db, case)
 

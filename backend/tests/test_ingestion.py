@@ -33,7 +33,7 @@ from app.services.ingestion import IngestionService, refresh_case_status
 from tests.conftest import Tenant
 
 CLIENT_GSTIN = "29AABCU9603R1ZJ"
-OTHER_GSTIN = "27AAACA1111A1Z5"
+OTHER_GSTIN = "27AAACA1111A1ZS"
 
 
 def prepared(text: str) -> PreparedDocument:
@@ -296,7 +296,7 @@ async def test_an_invoice_for_the_wrong_client_is_caught(tenant: Tenant) -> None
             prepared=prepared("TAX INVOICE\nInvoice No 1\nCGST SGST\nHSN 9983"),
             client=await session.get(Client, client.id),
             case=await session.get(ComplianceCase, case.id),
-            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1Z3"),
+            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1ZJ"),
             validation_passed=True,
         )
         await session.commit()
@@ -347,7 +347,7 @@ async def test_a_strangers_invoice_does_not_undo_a_settled_requirement(
             prepared=prepared(text),
             client=await session.get(Client, client.id),
             case=await session.get(ComplianceCase, case.id),
-            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1Z3"),
+            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1ZJ"),
             validation_passed=True,
         )
         await session.commit()
@@ -380,7 +380,7 @@ async def test_a_raised_finding_reaches_the_timeline(tenant: Tenant) -> None:
             prepared=prepared("TAX INVOICE\nInvoice No 1\nCGST SGST\nHSN 9983"),
             client=await session.get(Client, client.id),
             case=await session.get(ComplianceCase, case.id),
-            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1Z3"),
+            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1ZJ"),
             validation_passed=True,
         )
         await session.commit()
@@ -633,3 +633,69 @@ async def test_every_step_reaches_the_timeline(tenant: Tenant) -> None:
     assert "document.classified" in actions
     assert "requirement.updated" in actions
     assert all(event.summary for event in events), "an event nobody can read is not an audit trail"
+
+
+async def test_a_document_that_cannot_be_read_is_reported_to_the_firm(
+    tenant: Tenant, object_store, use_provider
+) -> None:
+    """"Received, waiting to be read" must not become a place things go missing.
+
+    Before this, a client's invoice that no tier could read sat on the case
+    for ever, and the only trace was a failed row in a queue table nobody
+    opens.
+    """
+    from app.core.config import get_settings
+    from app.core.errors import ExtractionFailedError
+    from app.models import ExtractionJob, JobStatus
+    from app.repositories.jobs import JobRepository
+    from app.services.extraction_service import ExtractionService
+    from tests.conftest import StubProvider
+    from tests.fixtures.invoices import build_png
+
+    use_provider(StubProvider(raises=ExtractionFailedError("The page is unreadable.")))
+
+    client = await make_client(tenant)
+    case = await make_case(tenant, client.id)
+    async with get_session_factory()() as session:
+        document = Document(
+            organization_id=tenant.organization_id,
+            client_id=client.id,
+            case_id=case.id,
+            filename="blurry-photo.png",
+            content_type="image/png",
+            size_bytes=4096,
+            page_count=1,
+            checksum_sha256="c" * 64,
+            classified_type=DocumentType.PURCHASE_INVOICE,
+            storage_key="org/doc.png",
+            source="whatsapp",
+        )
+        session.add(document)
+        await session.flush()
+        job = await JobRepository(session).create(
+            organization_id=tenant.organization_id,
+            document_id=document.id,
+            request_id=None,
+            max_attempts=1,
+        )
+        await session.commit()
+        job_id, document_id = job.id, document.id
+
+    await object_store.put("org/doc.png", build_png(), content_type="image/png")
+
+    async with get_session_factory()() as session:
+        row = await session.get(ExtractionJob, job_id)
+        await ExtractionService(session).process_job(row, settings=get_settings())
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        row = await session.get(ExtractionJob, job_id)
+        problems = await ExceptionRepository(session).list_for_organization(
+            tenant.organization_id
+        )
+
+    assert row.status == JobStatus.FAILED
+    unreadable = [p for p in problems if p.type == ExceptionType.UNREADABLE_DOCUMENT]
+    assert unreadable, "the firm has to be told, not just the queue table"
+    assert "blurry-photo.png" in unreadable[0].message
+    assert unreadable[0].document_id == document_id

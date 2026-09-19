@@ -18,6 +18,7 @@ from app.models import (
     AgentJob,
     AgentJobStatus,
     CaseStatus,
+    Client,
     ComplianceCase,
     ExceptionType,
     RequirementStatus,
@@ -538,3 +539,102 @@ async def test_a_dry_run_names_the_clients_and_queues_nothing(
         )
     assert pending == [], "a dry run must leave the queue exactly as it found it"
     assert whatsapp.sent == []
+
+
+# --- a promise has a shelf life -----------------------------------------
+
+
+def test_a_promise_still_ahead_reads_as_still_ahead() -> None:
+    text = render_user_prompt(
+        snapshot(
+            today=dt.date(2026, 9, 21),
+            facts={
+                "document_commitment_date": {
+                    "date": "2026-09-23",
+                    "said": "parso bhej dunga",
+                }
+            },
+        )
+    )
+    assert "23 Sep" in text
+    assert "has not come yet" in text
+
+
+def test_a_promise_that_has_passed_says_so() -> None:
+    """Otherwise the model waits for ever on something already overdue."""
+    text = render_user_prompt(
+        snapshot(
+            today=dt.date(2026, 9, 28),
+            facts={
+                "document_commitment_date": {
+                    "date": "2026-09-23",
+                    "said": "kal bhej dunga",
+                }
+            },
+        )
+    )
+    assert "5 days ago" in text
+    assert "has not arrived" in text
+
+
+async def test_a_promise_stops_being_a_fact_once_it_expires(tenant: Tenant) -> None:
+    """The record keeps it; the agent's view of the client does not."""
+    from app.repositories.clients import ClientFactRepository
+
+    person = await make_client(tenant)
+    async with get_session_factory()() as session:
+        await ClientFactRepository(session).record(
+            organization_id=tenant.organization_id,
+            client_id=person.id,
+            key="document_commitment_date",
+            value={"date": "2026-09-23", "said": "kal bhej dunga"},
+            expires_at=dt.datetime(2026, 9, 25, tzinfo=dt.UTC),
+        )
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        repository = ClientFactRepository(session)
+        during = await repository.all_for_client(
+            tenant.organization_id, person.id, now=dt.datetime(2026, 9, 24, tzinfo=dt.UTC)
+        )
+        after = await repository.all_for_client(
+            tenant.organization_id, person.id, now=dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
+        )
+
+    assert [f.key for f in during] == ["document_commitment_date"]
+    assert after == [], "a fortnight-old promise is not something to act on"
+
+
+async def test_the_agent_gives_a_promise_an_expiry(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    from app.repositories.clients import ClientFactRepository
+    from app.services.agent import AgentContext, ClientCommunicationAgent
+    from app.services.intent import read_intent
+
+    person = await make_client(tenant, whatsapp_phone=PHONE)
+    case = await make_case(tenant, person.id)
+    today = dt.date(2026, 9, 21)
+
+    async with get_session_factory()() as session:
+        agent = ClientCommunicationAgent(
+            session, AgentContext(organization_id=tenant.organization_id)
+        )
+        await agent.handle_reply(
+            await session.get(Client, person.id),
+            read_intent("kal bhej dunga", today=today),
+            case=await session.get(ComplianceCase, case.id),
+            text="kal bhej dunga",
+            now=dt.datetime(2026, 9, 21, 12, 0, tzinfo=dt.UTC),
+        )
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        fact = await ClientFactRepository(session).get(
+            tenant.organization_id, person.id, "document_commitment_date"
+        )
+    assert fact is not None
+    assert fact.expires_at is not None, (
+        "a promise recorded for ever is a promise that stalls a chase"
+    )
+    assert fact.expires_at.date() <= dt.date(2026, 9, 25)

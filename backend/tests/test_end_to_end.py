@@ -48,7 +48,7 @@ from tests.fixtures.invoices import InvoiceSpec, build_invoice_pdf, build_statem
 PHONE = "+919876543210"
 FROM = "919876543210"
 GSTIN = "29AABCU9603R1ZJ"
-SOMEBODY_ELSE = "27AAACA1111A1Z5"
+SOMEBODY_ELSE = "27AAACA1111A1ZS"
 PERIOD = "2026-09"
 
 
@@ -238,7 +238,7 @@ async def test_the_whole_journey(
         client_id=person["id"],
         filename="not-theirs.pdf",
         buyer=SOMEBODY_ELSE,
-        supplier="27AAACB2222B1Z3",
+        supplier="27AAACB2222B1ZJ",
     )
 
     exceptions = data(await client.get("/v1/exceptions", headers=auth_headers))
@@ -438,3 +438,72 @@ async def test_a_case_cannot_be_opened_twice_for_the_same_period(
     duplicate = await client.post("/v1/cases", headers=auth_headers, json=body)
     assert duplicate.status_code == 400
     assert PERIOD in duplicate.json()["error"]["message"]
+
+
+async def test_resolving_an_exception_lets_the_right_document_through(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    tenant: Tenant,
+    whatsapp: MockWhatsAppProvider,
+) -> None:
+    """A stranger's invoice must not lock a requirement for ever.
+
+    It arrives, it is wrong, it goes to review. Until the firm's decision
+    released it, the client's own invoice arriving afterwards was turned away
+    by a requirement nothing could ever satisfy again — the case could not be
+    filed and nobody could see why.
+    """
+    person = data(
+        await client.post(
+            "/v1/clients",
+            headers=auth_headers,
+            json={"name": "Marigold Retail", "whatsapp_phone": PHONE, "gstin": GSTIN},
+        )
+    )
+    case = data(
+        await client.post(
+            "/v1/cases",
+            headers=auth_headers,
+            json={"client_id": person["id"], "type": "gst", "period": PERIOD},
+        )
+    )
+
+    await ingest_invoice(
+        tenant,
+        case_id=case["id"],
+        client_id=person["id"],
+        filename="not-theirs.pdf",
+        buyer=SOMEBODY_ELSE,
+        supplier="27AAACB2222B1ZJ",
+    )
+    held = await statuses(tenant, case["id"])
+    assert held[DocumentType.SALES_INVOICE] == RequirementStatus.NEEDS_REVIEW
+
+    exceptions = data(await client.get("/v1/exceptions", headers=auth_headers))
+    mismatch = next(e for e in exceptions if e["type"] == ExceptionType.GSTIN_MISMATCH)
+    resolved = data(
+        await client.post(
+            f"/v1/exceptions/{mismatch['id']}/resolve",
+            headers=auth_headers,
+            json={"status": ExceptionStatus.RESOLVED, "note": "Their brother's firm."},
+        )
+    )
+    assert resolved["status"] == ExceptionStatus.RESOLVED
+
+    released = await statuses(tenant, case["id"])
+    assert released[DocumentType.SALES_INVOICE] == RequirementStatus.INVALID, (
+        "the requirement is owed again, not stuck in review"
+    )
+
+    # And now the client's own invoice settles it.
+    await ingest_invoice(
+        tenant,
+        case_id=case["id"],
+        client_id=person["id"],
+        filename="sept-sales.pdf",
+        buyer=SOMEBODY_ELSE,
+        supplier=GSTIN,
+    )
+    assert (await statuses(tenant, case["id"]))[
+        DocumentType.SALES_INVOICE
+    ] == RequirementStatus.VALID

@@ -73,14 +73,14 @@ DEADLINE = dt.date(2026, 10, 20)
 # Checksum-valid and deliberately fictional.
 CLIENTS = [
     ("ABC Traders", "ABC Traders Pvt Ltd", "29AABCU9603R1ZJ", "+919800000001"),
-    ("Marigold Retail", "Marigold Retail Pvt Ltd", "27AAACA1111A1Z5", "+919800000002"),
+    ("Marigold Retail", "Marigold Retail Pvt Ltd", "27AAACA1111A1ZS", "+919800000002"),
     ("Udupi Software", "Udupi Software Systems", "29AABCU9603R1ZJ", "+919800000003"),
-    ("Kanchan Textiles", "Kanchan Textiles LLP", "27AAACB2222B1Z3", "+919800000004"),
-    ("Deshmukh Motors", "Deshmukh Motors", "27AAACA1111A1Z5", "+919800000005"),
+    ("Kanchan Textiles", "Kanchan Textiles LLP", "27AAACB2222B1ZJ", "+919800000004"),
+    ("Deshmukh Motors", "Deshmukh Motors", "27AAACA1111A1ZS", "+919800000005"),
     ("Nandi Foods", "Nandi Foods Pvt Ltd", "29AABCU9603R1ZJ", "+919800000006"),
-    ("Pinnacle Logistics", "Pinnacle Logistics", "27AAACB2222B1Z3", "+919800000007"),
+    ("Pinnacle Logistics", "Pinnacle Logistics", "27AAACB2222B1ZJ", "+919800000007"),
     ("Sunrise Chemicals", "Sunrise Chemicals Pvt Ltd", "29AABCU9603R1ZJ", "+919800000008"),
-    ("Verma Hardware", "Verma Hardware Stores", "27AAACA1111A1Z5", "+919800000009"),
+    ("Verma Hardware", "Verma Hardware Stores", "27AAACA1111A1ZS", "+919800000009"),
     ("Coastal Exports", "Coastal Exports LLP", "29AABCU9603R1ZJ", "+919800000010"),
 ]
 
@@ -329,8 +329,8 @@ async def seed(*, reset: bool = False) -> None:
             dedupe_key=f"gstin_mismatch:{document.id}",
             details={
                 "client_gstin": client.gstin,
-                "supplier_gstin": "24AAACA9999A1Z1",
-                "buyer_gstin": "24AAACB8888B1Z2",
+                "supplier_gstin": "24AAACA9999A1ZM",
+                "buyer_gstin": "24AAACB8888B1ZP",
             },
         )
 

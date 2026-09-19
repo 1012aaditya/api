@@ -515,12 +515,22 @@ curl -X POST http://localhost:8000/v1/agent/run \
 Nothing is queued and nothing is sent; the database is left exactly as it was
 found. The dashboard has the same thing as a button.
 
-When a file arrives, it is classified from what it says — "Statement of
+When a file arrives it is classified from what it says — "Statement of
 Account", an IFSC code, opening and closing balances — and the evidence is
 kept, so the firm can see *why* it was read that way. A document the
 classifier is not confident about is not filed under a guess: it waits for a
-person. So does an invoice whose GSTIN belongs to neither the client nor their
-supplier, which is how one client's papers stop landing in another's books.
+person.
+
+An invoice then goes one step further, because **arriving is not the same as
+being checked**. It is marked *received, waiting to be read*, queued for the
+extraction pipeline, and only once the fields are off the page do the checks
+run: is this GSTIN the client's, is it the right month, do the totals add up.
+An invoice naming neither the client nor their supplier stops there and waits
+for a person — which is how one client's papers stop landing in another's
+books. If nothing can read it, that is an exception on the case too, not a
+document quietly sitting in limbo.
+
+Nothing says a requirement is met until its document has been read.
 
 The ladder ends with a person, never with a fourth message. After the firm's
 configured number of reminders the agent stops, raises an exception, and

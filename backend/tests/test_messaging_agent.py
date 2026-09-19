@@ -7,6 +7,7 @@ import datetime as dt
 import httpx
 import pytest
 
+from app.core.config import get_settings
 from app.core.security import sign_payload
 from app.db.session import get_session_factory
 from app.models import (
@@ -24,6 +25,7 @@ from app.models import (
 from app.providers.messaging.mock import MockWhatsAppProvider
 from app.providers.messaging.registry import set_provider
 from app.repositories.clients import RequirementRepository
+from app.repositories.jobs import JobRepository
 from app.repositories.operations import (
     AgentEventRepository,
     AgentPolicyRepository,
@@ -503,10 +505,15 @@ async def test_an_unknown_organization_is_not_confirmed(
 # --- a document arriving over WhatsApp ----------------------------------
 
 
-async def test_a_document_sent_on_whatsapp_settles_its_requirement(
+async def test_an_invoice_on_whatsapp_is_received_but_not_yet_cleared(
     client: httpx.AsyncClient, tenant: Tenant, whatsapp: MockWhatsAppProvider
 ) -> None:
-    """The §45 flow, end to end, with no external credentials anywhere."""
+    """Arriving is not the same as being checked.
+
+    Every check that stops one client's paperwork landing in another's books
+    needs the fields off the page. Until the invoice has been read, the honest
+    state is "we have it", not "that requirement is done" (§28).
+    """
     person = await make_client(tenant, whatsapp_phone=PHONE)
     case = await make_case(tenant, person.id)
 
@@ -528,12 +535,60 @@ async def test_a_document_sent_on_whatsapp_settles_its_requirement(
         events = await AgentEventRepository(session).timeline(
             tenant.organization_id, client_id=person.id
         )
+        queued = await JobRepository(session).list_for_organization(
+            tenant.organization_id
+        )
 
-    settled = [r for r in requirements if r.status == RequirementStatus.VALID]
-    assert settled, "an invoice that arrived should settle an invoice requirement"
+    received = [r for r in requirements if r.status == RequirementStatus.RECEIVED]
+    assert received, "the document is on the case"
+    assert not [r for r in requirements if r.status == RequirementStatus.VALID], (
+        "nothing may say the requirement is met before the invoice has been read"
+    )
+    assert queued, "and reading it is queued, not forgotten"
+    assert queued[0].document_id is not None
+
     actions = {event.action for event in events}
     assert "whatsapp.received" in actions
     assert "document.classified" in actions
+
+
+async def test_reading_it_is_what_settles_the_requirement(
+    client: httpx.AsyncClient, tenant: Tenant, whatsapp: MockWhatsAppProvider, use_provider
+) -> None:
+    """The other half: the worker reads it, and the checks run against the case."""
+    from tests.conftest import StubProvider
+
+    use_provider(StubProvider())
+    person = await make_client(tenant, whatsapp_phone=PHONE, gstin="29AABCU9603R1ZJ")
+    case = await make_case(tenant, person.id)
+
+    whatsapp.register_media("media-2", build_invoice_pdf())
+    await client.post(
+        webhook_url(tenant),
+        json=MockWhatsAppProvider.webhook_for_document(
+            message_id="wamid.doc2",
+            from_phone="919876543210",
+            media_reference="media-2",
+            filename="september-invoice.pdf",
+        ),
+    )
+
+    from app.services.extraction_service import ExtractionService
+
+    async with get_session_factory()() as session:
+        job = await JobRepository(session).claim_next()
+        assert job is not None, "the arrival queued a job to read the document"
+        await session.commit()
+        await ExtractionService(session).process_job(job, settings=get_settings())
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        requirements = await RequirementRepository(session).for_case(
+            tenant.organization_id, case.id
+        )
+
+    settled = [r for r in requirements if r.status == RequirementStatus.VALID]
+    assert settled, "once read and checked against the client, it settles"
 
 
 async def test_a_file_we_cannot_read_is_reported_to_the_firm(

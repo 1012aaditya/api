@@ -461,8 +461,13 @@ class IngestionService:
         this_document_owns_it = requirement.received_document_id == document.id
 
         if not this_document_owns_it:
+            # Say which it is. "Already settled" reads as good news when the
+            # requirement is really sitting in review because the last
+            # document turned out to be somebody else's.
+            held = requirement.status in RequirementStatus.WITH_THE_FIRM
+            state = "with a person for review" if held else "already settled"
             outcome.steps.append(
-                f"{requirement.label} is already settled by another document; "
+                f"{requirement.label} is {state} by another document; "
                 "this one is filed against the case"
             )
         elif blocking:
@@ -493,6 +498,14 @@ class IngestionService:
                 )
             )
             outcome.steps.append("Held for review: validation did not pass")
+        elif invoice is None and document_type in DocumentType.INVOICE_LIKE:
+            # An invoice nobody has read is not a satisfied requirement. Every
+            # check that stops one client's paperwork landing in another's
+            # books — the GSTIN, the period, the arithmetic — needs the fields
+            # off the page, and they are not here yet. The document is in; it
+            # is not cleared (§28).
+            if requirement.status == RequirementStatus.RECEIVED:
+                outcome.steps.append(f"{requirement.label} received, waiting to be read")
         else:
             requirement.move_to(RequirementStatus.PROCESSING)
             requirement.move_to(RequirementStatus.VALID)
