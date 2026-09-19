@@ -58,6 +58,7 @@ from app.schemas.operations import (
     TaskIn,
     TaskOut,
 )
+from app.services.ingestion import refresh_case_status
 from app.services.messaging import SENT_ACTION
 
 router = APIRouter(tags=["operations"])
@@ -291,7 +292,9 @@ async def create_case(
         deadline=payload.deadline,
         requirements=requirements,
     )
-    case.status = CaseStatus.BLOCKED
+    # Derived, not asserted: a new case is blocked because its requirements
+    # say so, by the same rule that will move it off blocked later (§I).
+    await refresh_case_status(db, case)
     await AgentEventRepository(db).record(
         organization_id=auth.organization_id,
         client_id=client.id,

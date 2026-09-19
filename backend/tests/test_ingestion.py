@@ -307,6 +307,93 @@ async def test_an_invoice_for_the_wrong_client_is_caught(tenant: Tenant) -> None
     assert outcome.requirement.status == RequirementStatus.NEEDS_REVIEW
 
 
+async def test_a_strangers_invoice_does_not_undo_a_settled_requirement(
+    tenant: Tenant,
+) -> None:
+    """The second file is the problem, not the one that already arrived.
+
+    A requirement another document satisfied stays satisfied. The exception
+    is what stops the case being filed — regressing the row would ask the
+    firm to re-check work that was fine.
+    """
+    client = await make_client(tenant)
+    case = await make_case(tenant, client.id)
+    theirs = await make_document(
+        tenant, filename="their-invoice.pdf", client_id=client.id, case_id=case.id
+    )
+    stranger = await make_document(
+        tenant, filename="not-theirs.pdf", client_id=client.id, case_id=case.id
+    )
+    text = "TAX INVOICE\nInvoice No 1\nCGST SGST\nHSN 9983"
+
+    async with get_session_factory()() as session:
+        first = await IngestionService(session).ingest(
+            document=await session.get(Document, theirs.id),
+            file=None,  # type: ignore[arg-type]
+            prepared=prepared(text),
+            client=await session.get(Client, client.id),
+            case=await session.get(ComplianceCase, case.id),
+            invoice=invoice(buyer=OTHER_GSTIN, supplier=CLIENT_GSTIN),
+            validation_passed=True,
+        )
+        await session.commit()
+    assert first.requirement.status == RequirementStatus.VALID
+    settled_id = first.requirement.id
+
+    async with get_session_factory()() as session:
+        second = await IngestionService(session).ingest(
+            document=await session.get(Document, stranger.id),
+            file=None,  # type: ignore[arg-type]
+            prepared=prepared(text),
+            client=await session.get(Client, client.id),
+            case=await session.get(ComplianceCase, case.id),
+            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1Z3"),
+            validation_passed=True,
+        )
+        await session.commit()
+
+    assert [e.type for e in second.exceptions] == [ExceptionType.GSTIN_MISMATCH]
+    assert second.requirement.id == settled_id
+    assert second.requirement.status == RequirementStatus.VALID
+    assert second.requirement.received_document_id == theirs.id
+
+    # And the case is still held back, by the exception rather than the row.
+    async with get_session_factory()() as session:
+        status = await refresh_case_status(
+            session, await session.get(ComplianceCase, case.id)
+        )
+        await session.commit()
+    assert status != CaseStatus.READY
+
+
+async def test_a_raised_finding_reaches_the_timeline(tenant: Tenant) -> None:
+    client = await make_client(tenant)
+    case = await make_case(tenant, client.id)
+    document = await make_document(
+        tenant, filename="invoice.pdf", client_id=client.id, case_id=case.id
+    )
+
+    async with get_session_factory()() as session:
+        await IngestionService(session).ingest(
+            document=await session.get(Document, document.id),
+            file=None,  # type: ignore[arg-type]
+            prepared=prepared("TAX INVOICE\nInvoice No 1\nCGST SGST\nHSN 9983"),
+            client=await session.get(Client, client.id),
+            case=await session.get(ComplianceCase, case.id),
+            invoice=invoice(buyer=OTHER_GSTIN, supplier="27AAACB2222B1Z3"),
+            validation_passed=True,
+        )
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        events = await AgentEventRepository(session).timeline(
+            tenant.organization_id, case_id=case.id
+        )
+    raised = [e for e in events if e.action == "exception.raised"]
+    assert raised, "a finding nobody can see in the feed is a finding nobody acts on"
+    assert raised[0].entity_type == "exception"
+
+
 async def test_the_buyer_gstin_decides_a_purchase_from_a_sale(tenant: Tenant) -> None:
     """Nothing on the page says which side you are on — the GSTIN does."""
     client = await make_client(tenant)

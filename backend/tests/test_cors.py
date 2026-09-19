@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.main import create_app
-
 ORIGIN = "https://dashboard.example.com"
 
 

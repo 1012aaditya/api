@@ -41,7 +41,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               </span>
             ) : user ? (
               <Link
-                href="/dashboard"
+                href="/command-centre"
                 className="rounded-md bg-accent px-3 py-1.5 font-medium text-white transition-opacity hover:opacity-90"
               >
                 Dashboard

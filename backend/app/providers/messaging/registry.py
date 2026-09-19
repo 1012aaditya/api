@@ -39,6 +39,17 @@ def register_provider(name: str, factory: ProviderFactory) -> None:
 def build_provider(settings: Settings | None = None) -> WhatsAppProvider:
     settings = settings or get_settings()
     name = settings.whatsapp_provider
+    if name == "mock" and settings.is_production:
+        # The mock reports every message as sent. In production that is a
+        # lie the firm would act on — the dashboard would show "WhatsApp
+        # sent to Marigold Retail" for a message no phone ever received
+        # (§28, §42). Better to refuse to start.
+        logger.error("whatsapp.mock_in_production")
+        raise MessagingUnavailableError(
+            "WHATSAPP_PROVIDER=mock sends nothing and reports success, which is "
+            "not something a production deployment may do. Configure a real "
+            "provider, or leave WhatsApp switched off in the agent policy."
+        )
     factory = _FACTORIES.get(name)
     if factory is None:
         logger.error("whatsapp.unknown_provider", provider=name)

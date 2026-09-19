@@ -313,3 +313,41 @@ def build_jpeg() -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (800, 1000), "white").save(buffer, "JPEG")
     return buffer.getvalue()
+
+
+def build_statement_pdf(*, month: str = "September 2026") -> bytes:
+    """A bank statement, as a real text-bearing PDF.
+
+    The classifier reads words, so a statement has to look like one: no
+    invoice number, no GSTIN, and the phrases a bank actually prints.
+    """
+    builder = PDFBuilder()
+    page = builder.new_page()
+
+    page.write(180, 800, "STATEMENT OF ACCOUNT", 16, bold=True)
+    page.write(40, 770, f"Statement Period: {month}", 10)
+    page.write(40, 756, "Account Number: XXXXXXXX4321", 10)
+    page.write(40, 742, "IFSC: HDFC0001234", 10)
+    page.write(40, 714, "Opening Balance", 10, bold=True)
+    page.write(200, 714, "1,42,500.00", 10)
+
+    rows = [
+        ("01/09/2026", "NEFT CR SALARY", "", "85,000.00"),
+        ("07/09/2026", "UPI DR KIRANA STORE", "2,150.00", ""),
+        ("18/09/2026", "CHEQUE DR 004521", "40,000.00", ""),
+    ]
+    y = 690
+    page.write(40, y, "Date", 9, bold=True)
+    page.write(120, y, "Narration", 9, bold=True)
+    page.write(340, y, "Withdrawal", 9, bold=True)
+    page.write(440, y, "Deposit", 9, bold=True)
+    for date, narration, withdrawal, deposit in rows:
+        y -= 16
+        page.write(40, y, date, 9)
+        page.write(120, y, narration, 9)
+        page.write(340, y, withdrawal, 9)
+        page.write(440, y, deposit, 9)
+
+    page.write(40, y - 30, "Closing Balance", 10, bold=True)
+    page.write(200, y - 30, "1,85,350.00", 10)
+    return builder.build()

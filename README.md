@@ -15,9 +15,12 @@ vision extraction, normalization, schema validation, **business validation**
 and confidence scoring, and it reports every one of those separately. The
 value is in knowing which fields you can trust.
 
-> **Status: MVP.** The synchronous API, asynchronous jobs, webhooks, and the
-> developer dashboard with its API playground are built and working. The Python
-> SDK and billing are not — see
+> **Status: MVP.** The synchronous API, asynchronous jobs, webhooks, the Python
+> SDK, and the dashboard with its API playground are built and working. So is
+> the layer above them — the one that
+> [chases clients for the documents](#chasing-the-documents-in-the-first-place)
+> in the first place, which is what a CA firm actually spends its month doing.
+> Billing is not built, and neither is a real WhatsApp adapter — see
 > [What is not built yet](#what-is-not-built-yet).
 
 ---
@@ -399,6 +402,21 @@ Consistent envelope, stable codes, no stack traces and no provider details:
 | `POST` | `/v1/webhooks/{id}/rotate` | session | New signing secret, same endpoint. |
 | `POST` | `/v1/webhooks/{id}/enable` · `/disable` | session | Stop or resume delivery. |
 | `GET` | `/v1/webhooks/deliveries` | session | Delivery attempts, with status and retries. |
+| `GET` | `/v1/command-centre` | session | **What needs attention today**, counted from the rows themselves. |
+| `POST` · `GET` | `/v1/clients` | session | Add a client; list them with where each one stands. |
+| `GET` · `PATCH` | `/v1/clients/{id}` | session | One client; change their details or switch automation off. |
+| `GET` | `/v1/clients/{id}/missing-documents` | session | What this client still owes, across their open cases. |
+| `POST` · `GET` | `/v1/cases` | session | **Open a compliance case**; list cases and what each is missing. |
+| `GET` | `/v1/cases/{id}` | session | One case, with every requirement and its state. |
+| `GET` | `/v1/exceptions` | session | **The review queue**: what the system would not decide alone. |
+| `POST` | `/v1/exceptions/{id}/resolve` | session | Resolve or dismiss one, with a note kept on the record. |
+| `POST` · `GET` | `/v1/tasks` | session | Work for a person, from the agent or from a colleague. |
+| `POST` | `/v1/tasks/{id}/complete` | session | Mark one done. |
+| `GET` | `/v1/conversations` | session | Every WhatsApp thread, with what was read from each reply. |
+| `GET` | `/v1/agent/activity` | session | Everything the agent did, in order. |
+| `GET` · `PUT` | `/v1/agent/policy` | session | **What the agent may do, and how hard it may push.** |
+| `POST` | `/v1/agent/run` | session | Queue a chase for every case that needs one. It queues; it does not send. |
+| `GET` · `POST` | `/v1/inbound/whatsapp/{org}` | signature | The provider's handshake, and inbound messages from clients. |
 
 API keys authenticate machine traffic; session tokens authenticate the
 dashboard. **Key management is session-only** — a leaked API key cannot mint
@@ -409,6 +427,99 @@ replayed from the browser) and needs to read the same data.
 `/v1/invoices/extract` also accepts a session, so the playground can run a real
 extraction. Those runs are tagged `dashboard_request` in the usage log and cost
 and count exactly like an API call — the playground does not get a free path.
+
+---
+
+## Chasing the documents in the first place
+
+Reading an invoice is the easy half. The hard half, for a CA firm, is getting
+the invoice at all: the same fifteen WhatsApp messages every month, to the same
+clients, asking for the same bank statement.
+
+That is what the operations layer does. A firm adds its clients, opens a case
+per client per period, and the system works out what that filing needs:
+
+```bash
+# Add a client.
+curl -X POST http://localhost:8000/v1/clients \
+  -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' \
+  -d '{"name":"Marigold Retail","whatsapp_phone":"+9198...","gstin":"29AABCU9603R1ZJ"}'
+
+# Open this month's GST case. The requirements come with it.
+curl -X POST http://localhost:8000/v1/cases \
+  -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' \
+  -d '{"client_id":"cli_...","type":"gst","period":"2026-09"}'
+# → status "blocked", with sales invoices, purchase invoices, the bank
+#   statement and GSTR-2B all "missing"
+
+# Queue a chase for everything that needs one.
+curl -X POST http://localhost:8000/v1/agent/run \
+  -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' -d '{}'
+# → {"scheduled": 14, "sent": 0}
+```
+
+`sent: 0` is not a bug. The sweep queues; the worker sends each reminder when
+it comes due. Pressing the button cannot message two hundred clients at once.
+
+When a client answers, the reply is read by rules rather than a model —
+including Hinglish, because that is what people actually write:
+
+| They send | It is read as | What happens |
+|---|---|---|
+| "kal bhej dunga" | a commitment, for tomorrow | the next reminder moves to the day after; **nothing is marked received** |
+| "bhej diya hai" | a claim that it was sent | the requirement does **not** move; the firm is told to look |
+| "mujhe samajh nahi aa raha" | a question | a task for a person; the agent does not explain tax |
+| "mat bhejo message" | do not contact | automation off for that client, an exception for the firm, queued work cancelled |
+
+When a file arrives, it is classified from what it says — "Statement of
+Account", an IFSC code, opening and closing balances — and the evidence is
+kept, so the firm can see *why* it was read that way. A document the
+classifier is not confident about is not filed under a guess: it waits for a
+person. So does an invoice whose GSTIN belongs to neither the client nor their
+supplier, which is how one client's papers stop landing in another's books.
+
+The ladder ends with a person, never with a fourth message. After the firm's
+configured number of reminders the agent stops, raises an exception, and
+creates a task saying who to call.
+
+### What it will not do
+
+* **It will not say a document arrived when it did not.** A client saying they
+  sent it is a claim, recorded as a claim.
+* **It will not decide what it is unsure of.** Below the firm's confidence
+  threshold the document goes to the review queue, not into the filing.
+* **It will not call anyone unless the firm switches calls on.** Voice is off
+  by default, and a call that is placed opens by saying it is an AI assistant
+  calling on behalf of the firm.
+* **It will not message a client who asked it to stop**, or outside the firm's
+  quiet hours, or past the firm's daily cap. Every refusal is written to the
+  timeline, so "why did nobody chase them?" has an answer.
+* **It will not answer questions about anyone's tax position.** Those become
+  tasks.
+
+### Seeing it without a client
+
+```bash
+python scripts/seed_demo.py           # a firm, ten synthetic clients, mixed states
+python scripts/seed_demo.py --reset   # tear it down and build it again
+```
+
+The clients are invented, the GSTINs are checksum-valid and identify no
+registered taxpayer, and no real document is in this repository. The demo uses
+no external credentials and sends no message anywhere.
+
+### What is not built
+
+**There is no real WhatsApp adapter yet.** The only provider registered in this
+build is the mock, which records messages and sends nothing. A production
+deployment that leaves `WHATSAPP_PROVIDER=mock` is refused at startup rather
+than allowed to report messages as sent that no phone received — the same rule
+that governs extraction without a provider. Connecting a WhatsApp Business
+account means writing one adapter against `WhatsAppProvider` and registering
+it; nothing else in the layer changes.
+
+The same is true of voice: the interface and the escalation path are built and
+tested, the adapter for an actual telephony account is not.
 
 ---
 
@@ -1103,6 +1214,13 @@ repository.
 
 Honest scope. These are designed for but not implemented:
 
+- **A real WhatsApp adapter** — the interface, the inbound webhook, the
+  follow-up ladder and the reply reading are built and tested against a mock
+  that sends nothing. No WhatsApp Business account is connected, and a
+  production deployment using the mock is refused at startup rather than
+  allowed to report messages as sent that nobody received.
+- **A real voice adapter** — same: the escalation path is built, no telephony
+  account is wired to it.
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.
 - **A hosted endpoint.** `docker compose up` runs the whole stack on one
@@ -1117,7 +1235,9 @@ Honest scope. These are designed for but not implemented:
   `tests/fixtures/`; field-level accuracy scoring does not.
 
 No accuracy figure is published anywhere in this repository, because none has
-been measured.
+been measured. Nor is anything here a statement about whether a filing made
+with it is compliant: that is the firm's professional judgement, and no part
+of this system has been reviewed by anyone qualified to say otherwise.
 
 ## License
 

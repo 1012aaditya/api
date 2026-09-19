@@ -153,8 +153,8 @@ any evidence gathered.
 | 7 | Client communication agent + tools | **done** |
 | 8 | Follow-up engine (`agent_jobs`) | **done** |
 | 9 | Voice abstraction + mock workflow | **done** |
-| 10 | CA command centre | |
-| 11 | End-to-end tests + demo seed | |
+| 10 | CA command centre | **done** |
+| 11 | End-to-end tests + demo seed | **done** |
 | 12 | Hardening | |
 
 P2 items in the brief (Tally, GST integration) are **already built** and stay
@@ -164,3 +164,24 @@ where they are.
 
 §45 of the brief: the 24-step flow, with every existing test still passing and
 demo mode working without any external credentials.
+
+`backend/tests/test_end_to_end.py` walks it in one test: a CA adds a client
+and opens a case over HTTP, the system derives what the filing needs, the
+sweep queues a chase, the worker sends it, the client answers in Hinglish,
+sends a bank statement over WhatsApp, and sends one invoice that belongs to
+somebody else — which stops and waits for a person rather than being filed
+under a guess. The firm resolves it, the last document lands, and the case
+becomes ready. No external credentials anywhere: the WhatsApp provider is
+the mock, the store is in memory, and no AI provider is configured.
+
+`scripts/seed_demo.py` (with `--reset`) is the same product with data in it,
+for showing rather than testing.
+
+### Not done, and worth saying plainly
+
+* No AI provider key exists in this environment, so extraction has only ever
+  run against a stub. No accuracy figure has been measured and none is
+  claimed (§30, §33).
+* `docker compose up` has never been executed here — the registry is blocked
+  from this container. The files are written and reviewed, not run.
+* The PostgreSQL test-harness flake in §6b is still unexplained.

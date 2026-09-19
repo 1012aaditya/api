@@ -449,7 +449,23 @@ class IngestionService:
         blocking = [
             item for item in outcome.exceptions if item.severity in Severity.BLOCKING
         ]
-        if blocking:
+
+        # Only the document the requirement is actually waiting on may move
+        # it. A second file arriving — a stranger's invoice, a duplicate, a
+        # re-send after a person settled it by hand — is a question about
+        # that file; dragging a settled requirement back into review would
+        # ask the firm to re-check work that was already fine, and would try
+        # transitions its state machine rightly refuses. What keeps the case
+        # off "ready" is the open exception (see refresh_case_status), not a
+        # regressed row.
+        this_document_owns_it = requirement.received_document_id == document.id
+
+        if not this_document_owns_it:
+            outcome.steps.append(
+                f"{requirement.label} is already settled by another document; "
+                "this one is filed against the case"
+            )
+        elif blocking:
             requirement.move_to(
                 RequirementStatus.NEEDS_REVIEW, reason=blocking[0].message
             )

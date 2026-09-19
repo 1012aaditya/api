@@ -125,6 +125,13 @@ def build_provider(settings=None) -> VoiceProvider:
     from app.core.config import get_settings
 
     settings = settings or get_settings()
+    if settings.voice_provider == "mock" and settings.is_production:
+        # Same reason as the messaging mock: a recorded call that never rang
+        # is worse than no call at all.
+        raise VoiceUnavailableError(
+            "VOICE_PROVIDER=mock places no calls and reports them as placed, "
+            "which is not something a production deployment may do."
+        )
     factory = _FACTORIES.get(settings.voice_provider)
     if factory is None:
         raise VoiceUnavailableError(

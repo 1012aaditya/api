@@ -553,3 +553,49 @@ async def test_a_file_we_cannot_read_is_reported_to_the_firm(
     async with get_session_factory()() as session:
         items = await ExceptionRepository(session).list_for_organization(tenant.organization_id)
     assert items and "cannot read" in items[0].message
+
+
+# --- what a production deployment may not do ----------------------------
+
+
+def production_settings(**overrides):
+    from app.core.config import Settings, get_settings
+
+    current = get_settings()
+    return Settings(
+        **{
+            **{
+                "app_env": "production",
+                "database_url": current.database_url,
+                "jwt_secret": current.jwt_secret,
+            },
+            **overrides,
+        }
+    )
+
+
+def test_the_mock_provider_is_refused_in_production() -> None:
+    """A mock that reports every message as sent is a lie in production.
+
+    The dashboard would show "WhatsApp sent to Marigold Retail" for a message
+    no phone ever received, and the firm would stop chasing (§28, §42).
+    """
+    from app.providers.messaging.registry import (
+        MessagingUnavailableError,
+        build_provider,
+    )
+
+    settings = production_settings(whatsapp_provider="mock")
+    with pytest.raises(MessagingUnavailableError) as raised:
+        build_provider(settings)
+    assert "mock" in str(raised.value).lower()
+
+    # And outside production it is exactly what you want.
+    assert build_provider(production_settings(app_env="development")).name == "mock"
+
+
+def test_the_mock_voice_provider_is_refused_in_production() -> None:
+    from app.providers.messaging.voice import VoiceUnavailableError, build_provider
+
+    with pytest.raises(VoiceUnavailableError):
+        build_provider(production_settings(voice_provider="mock"))

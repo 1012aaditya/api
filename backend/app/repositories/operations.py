@@ -117,6 +117,9 @@ class ExceptionRepository:
                 existing.status = ExceptionStatus.OPEN
                 existing.resolved_at = None
                 existing.resolution_note = None
+                await self._record(existing, "exception.reopened", f"Came back: {message}")
+            # An open finding seen again is the same finding. Recording it
+            # every time would bury the timeline in repeats of one problem.
             await self.session.flush()
             return existing
 
@@ -134,7 +137,26 @@ class ExceptionRepository:
         )
         self.session.add(item)
         await self.session.flush()
+        await self._record(item, "exception.raised", message)
         return item
+
+    async def _record(self, item: ReviewException, action: str, summary: str) -> None:
+        """Put the finding on the timeline.
+
+        An exception is something the system did — it stopped and asked for a
+        person. The firm should see that in the same feed as the messages, not
+        only by opening the review queue (§J, §29).
+        """
+        await AgentEventRepository(self.session).record(
+            organization_id=item.organization_id,
+            client_id=item.client_id,
+            case_id=item.case_id,
+            action=action,
+            summary=summary,
+            entity_type="exception",
+            entity_id=item.id,
+            details={"type": item.type, "severity": item.severity},
+        )
 
     async def resolve(
         self,
