@@ -43,7 +43,17 @@ services:
       APP_ENV: development
       APP_URL: http://localhost:8000
       LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+asyncpg://docuparse:docuparse@postgres:5432/docuparse
+      # Overridable, because Docker Desktop's embedded DNS occasionally stops
+      # answering and "postgres" then resolves to nothing. Postgres also
+      # publishes 5432 on the host, so this gets you running again without
+      # waiting for the network to behave:
+      #
+      #   DATABASE_URL=postgresql+asyncpg://docuparse:docuparse@host.docker.internal:5432/docuparse \
+      #     docker compose up -d
+      #
+      # (host.docker.internal is in /etc/hosts inside the container, so it
+      # needs no DNS at all.)
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://docuparse:docuparse@postgres:5432/docuparse}
       STORAGE_BACKEND: local
       STORAGE_LOCAL_PATH: /app/storage
 
