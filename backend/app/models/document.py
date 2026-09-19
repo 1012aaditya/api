@@ -35,6 +35,24 @@ class Document(Base):
     request_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     batch_id: Mapped[str | None] = mapped_column(ID, nullable=True, index=True)
 
+    # --- CA Operations: which client and which case this belongs to ------
+    # Nullable on purpose. The extraction API uploads documents with no client
+    # at all, and every existing caller must keep working untouched.
+    client_id: Mapped[str | None] = mapped_column(
+        ID, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    case_id: Mapped[str | None] = mapped_column(
+        ID, ForeignKey("compliance_cases.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    #: What the classifier decided this is, with its confidence. Distinct from
+    #: `document_type`, which is what the *pipeline* was asked to treat it as.
+    classified_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    classification_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    #: How it arrived: "api", "dashboard", "whatsapp".
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="api", server_default=text("'api'")
+    )
+
     filename: Mapped[str] = mapped_column(String(400), nullable=False)
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)

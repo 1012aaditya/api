@@ -30,8 +30,12 @@ _DB_PATH = Path(_TMP_DIR) / "test.db"
 # against the engine production actually uses — which is where dialect-only
 # bugs live: JSONB, FOR UPDATE SKIP LOCKED, and a boolean that SQLite will
 # happily compare against an integer.
-_TEST_DATABASE_URL = os.environ.get(
-    "DOCUPARSE_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_DB_PATH}"
+# An empty value means "unset". `DOCUPARSE_TEST_DATABASE_URL= pytest` is the
+# obvious way to ask for the SQLite default, and os.environ.get would hand back
+# the empty string and break every test with an unreadable engine error.
+_TEST_DATABASE_URL = (
+    os.environ.get("DOCUPARSE_TEST_DATABASE_URL", "").strip()
+    or f"sqlite+aiosqlite:///{_DB_PATH}"
 )
 
 # Settings are read at import time, so the environment must be set first.
