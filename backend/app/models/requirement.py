@@ -221,8 +221,16 @@ class DocumentRequirement(Base):
         return self.required and self.status in RequirementStatus.OUTSTANDING
 
     def move_to(self, target: str, *, reason: str | None = None) -> None:
-        """Transition, or raise. The only way this column should change."""
-        assert_transition(self.status, target)
+        """Transition, or raise. The only way this column should change.
+
+        A requirement that has not been flushed yet has ``status is None``,
+        because the column default is applied by the database on insert. That
+        is not a fourth kind of state: a requirement nobody has recorded
+        anything about is MISSING, so treat it as such rather than making
+        callers flush before they can use the object.
+        """
+        current = self.status or RequirementStatus.MISSING
+        assert_transition(current, target)
         self.status = target
         if reason is not None:
             self.reason = reason

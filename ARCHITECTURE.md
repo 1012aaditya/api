@@ -96,49 +96,47 @@ document received", "did the call happen", "did validation pass".
 | PII to an AI provider | Org policy can force local-only; prompts receive named fields, never whole documents. |
 | Demo needs no credentials | Mock WhatsApp, Voice and AI providers selected by config (§31). |
 
-## 6b. Known pre-existing defect (not introduced by this work)
+## 6b. Known defect in the PostgreSQL test path — cause not yet found
 
-`test_the_worker_claims_each_job_once` and
-`test_batch_progress_moves_as_the_worker_runs` fail intermittently — roughly
-one run in five — **on PostgreSQL only**, and only in a multi-test run. Both
-pass in isolation.
+`test_the_worker_claims_each_job_once` fails roughly one run in five **on
+PostgreSQL only**, and only when other test files run first. It passes in
+isolation and always passes on SQLite. `process_available_jobs` returns fewer
+jobs than were queued.
 
-What is established:
+**What is established:**
 
-* The worker fails one job with `StorageError: The stored document is no
-  longer available.`, which sends it to a 30-second retry, so the loop returns
-  fewer jobs than the test expects.
-* At the moment of failure the document's `storage_key` **is** present in the
-  test's `InMemoryObjectStore`, both before and after the run, and
-  `get_object_store() is object_store` is True when checked from the test body.
-* `InMemoryObjectStore.get` raises `KeyError`, never `StorageError`. That
-  message exists only in `LocalObjectStore` and `S3ObjectStore`. So the worker
-  resolved a **different** object store than the test installed — the
-  `set_object_store` singleton was reset underneath it.
-* **It reproduces on a clean checkout of `HEAD`** (verified by stashing this
-  branch's changes and rerunning: 1 failure in 5 runs), so the CA-operations
-  work did not cause it.
+* It reproduces on a clean checkout of the commit before the CA-operations
+  work, so no model or service added for this product causes it.
+* It cannot predate the PostgreSQL test harness itself (commit `70d1798`),
+  because before that there was no way to run the suite against PostgreSQL.
+  So it is most likely something in that harness — the per-test
+  `dispose_engine()`, or fixture teardown interleaving under pytest-asyncio's
+  per-test event loops.
+* In one captured failure the worker raised
+  `StorageError: The stored document is no longer available` while the
+  document's key was demonstrably present in the test's `InMemoryObjectStore`,
+  and `get_object_store() is object_store` was True from the test body.
 
-Most likely cause: the autouse `_reset_singletons` fixture's teardown
-(`set_object_store(None)`) interleaving with the next test under asyncio, so
-the worker falls back to building a real store from settings. The fix is
-probably to make the object store request-scoped rather than a module global,
-or to have the worker capture the store once per run. Left as a known issue
-rather than fixed blind, because it is unrelated to this feature and the
-product work is time-boxed.
+**What was tried and did not work:** leaving the object store installed at
+teardown instead of resetting it to `None`, on the theory that a real
+`LocalObjectStore` was being built in the gap. The flake survived unchanged
+over eight runs, so that explanation is wrong and the change was reverted
+rather than kept on a disproven rationale.
 
-**It will make CI red on the PostgreSQL job intermittently.** It should be
-fixed before that job is treated as a gate.
+**Status:** root cause unknown. It will make the PostgreSQL CI job
+intermittently red, and that job should not be treated as a gate until this is
+fixed. It does not affect SQLite runs, and no production code path is
+implicated by any evidence gathered so far.
 
 ## 7. Plan against the brief's day numbering
 
 | Day | Work | Status |
 |---|---|---|
 | 1 | Repository audit, this document | **done** |
-| 2 | `Client`, `ComplianceCase`, roles | |
-| 3 | `DocumentRequirement` + state machines | |
-| 4 | Ingestion: classify → extract → validate, attached to a case | |
-| 5 | Exception engine | |
+| 2 | `Client`, `ComplianceCase`, roles | **done** |
+| 3 | `DocumentRequirement` + state machines | **done** |
+| 4 | Ingestion: classify → extract → validate, attached to a case | **done** |
+| 5 | Exception engine | **done** |
 | 6 | WhatsApp abstraction + mock provider + inbound webhook | |
 | 7 | Client communication agent + tools | |
 | 8 | Follow-up engine (`agent_jobs`) | |
