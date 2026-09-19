@@ -25,11 +25,20 @@ import pytest
 _TMP_DIR = tempfile.mkdtemp(prefix="docuparse-tests-")
 _DB_PATH = Path(_TMP_DIR) / "test.db"
 
+# SQLite by default, so `make test` needs no services (§40). Point
+# DOCUPARSE_TEST_DATABASE_URL at a real PostgreSQL to run the same suite
+# against the engine production actually uses — which is where dialect-only
+# bugs live: JSONB, FOR UPDATE SKIP LOCKED, and a boolean that SQLite will
+# happily compare against an integer.
+_TEST_DATABASE_URL = os.environ.get(
+    "DOCUPARSE_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_DB_PATH}"
+)
+
 # Settings are read at import time, so the environment must be set first.
 os.environ.update(
     {
         "APP_ENV": "test",
-        "DATABASE_URL": f"sqlite+aiosqlite:///{_DB_PATH}",
+        "DATABASE_URL": _TEST_DATABASE_URL,
         "REDIS_URL": "",
         "STORAGE_BACKEND": "local",
         "STORAGE_LOCAL_PATH": str(Path(_TMP_DIR) / "storage"),
@@ -165,6 +174,9 @@ def _apply_migrations() -> Iterator[None]:
 
     config = Config("alembic.ini")
     config.set_main_option("script_location", "alembic")
+    if not _TEST_DATABASE_URL.startswith("sqlite"):
+        # The SQLite file is freshly made per run; a real database is not.
+        command.downgrade(config, "base")
     command.upgrade(config, "head")
     yield
 
@@ -176,6 +188,20 @@ async def _clean_database() -> AsyncIterator[None]:
         for table in reversed(Base.metadata.sorted_tables):
             await session.execute(table.delete())
         await session.commit()
+
+    if not _TEST_DATABASE_URL.startswith("sqlite"):
+        # pytest-asyncio gives each test its own event loop, but the engine is
+        # a process-wide singleton, so a pooled connection opened under one
+        # loop gets handed to the next test running under another — and asyncpg
+        # raises "attached to a different loop". aiosqlite does not care, which
+        # is why this only shows up against a real database.
+        #
+        # Disposing per test costs a connection setup each time and keeps the
+        # pool honest. Production holds one loop for the process lifetime and
+        # is unaffected.
+        from app.db.session import dispose_engine
+
+        await dispose_engine()
 
 
 @pytest.fixture(autouse=True)

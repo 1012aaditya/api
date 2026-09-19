@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("normalized_name", sa.String(300), nullable=False),
         sa.Column("gstin", sa.String(15), nullable=True),
         sa.Column("parent_group", sa.String(200), nullable=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default="1"),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", TS, nullable=False),
         sa.Column("updated_at", TS, nullable=False),
         sa.ForeignKeyConstraint(

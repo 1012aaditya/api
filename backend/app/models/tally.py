@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint, text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import ID, Base, UTCDateTime, utcnow
@@ -54,7 +54,7 @@ class Ledger(Base):
     parent_group: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default=text("1")
+        Boolean, nullable=False, default=True, server_default=true()
     )
     created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
     updated_at: Mapped[dt.datetime] = mapped_column(

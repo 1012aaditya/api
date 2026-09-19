@@ -35,7 +35,49 @@ produce invoice data without a real provider call.
 
 ---
 
-## Quickstart
+## Run it in one command
+
+If you have Docker, you need nothing else — not Python, not Node, not Postgres:
+
+```bash
+git clone https://github.com/1012aaditya/api.git docuparse
+cd docuparse
+docker compose up --build        # or: make stack
+```
+
+Then open <http://localhost:3000> and sign up. The API is on
+<http://localhost:8000>, its interactive schema on
+<http://localhost:8000/docs>.
+
+This runs the API, the worker and the dashboard against **PostgreSQL**, which
+is what a real deployment uses. Migrations are applied on startup.
+
+No extraction provider is configured out of the box, so
+`POST /v1/invoices/extract` returns `503 extraction_provider_unavailable`
+rather than inventing invoice data. The `qr` and `text_layer` tiers still read
+digital invoices with no model at all — which is most B2B PDFs. To use a model,
+point it at any OpenAI-compatible endpoint before starting:
+
+```bash
+AI_BASE_URL=http://host.docker.internal:11434/v1 \
+AI_API_KEY=... AI_MODEL=... docker compose up --build
+```
+
+The compose file's `JWT_SECRET` and `WEBHOOK_SECRET` are development values and
+say so. Generate real ones (`openssl rand -hex 32`) before it is reachable by
+anyone but you.
+
+> **Not yet verified:** the images are written against the documented base
+> images and every part that can be checked without Docker has been — the
+> dependency extraction, the package install, the entrypoint, and the exact
+> production server the dashboard image runs. But the container registry is
+> blocked from the environment they were written in, so `docker compose up`
+> itself has never been executed. If it fails, the error is worth reporting
+> rather than working around.
+
+---
+
+## Quickstart (without Docker)
 
 ### Prerequisites
 
@@ -136,6 +178,7 @@ confidence and a copy-pasteable cURL command.
 
 ```bash
 make test           # 388 backend tests, no services required
+make test-pg        # the same 388 against PostgreSQL (needs `make up`)
 make test-sdk       # 58 Python client tests, no services required
 make lint
 make test-web       # typecheck + browser smoke check (needs both servers up)
@@ -143,6 +186,14 @@ make test-web       # typecheck + browser smoke check (needs both servers up)
 
 The backend suite runs entirely on SQLite and in-memory doubles, so it needs
 neither Postgres, Redis, nor an AI provider.
+
+Point `DOCUPARSE_TEST_DATABASE_URL` at a real PostgreSQL and the same 388 tests
+run against the engine production uses. That is where dialect-only bugs live,
+and it has found them: a boolean column whose server default was written as
+`1` passes on SQLite and makes Postgres refuse the comparison outright, and the
+model-drift check was building a *synchronous* engine from an async URL — so it
+could only ever have run on SQLite, the one dialect it is least useful on. CI
+runs both.
 
 ---
 
@@ -989,11 +1040,13 @@ deployment can be wired up without changing the env contract.
 ```bash
 make help       # list every target
 make setup      # venv + dependencies + .env
-make up/down    # Postgres, Redis, MinIO
+make stack      # everything in Docker: API, worker, dashboard, Postgres
+make up/down    # just the backing services, for host-side development
 make migrate    # alembic upgrade head
 make revision m="add webhooks"
 make run        # uvicorn with reload
 make test       # pytest — needs no services
+make test-pg    # the same suite against PostgreSQL
 make lint       # ruff
 make setup-sdk  # editable install of the Python client
 make test-sdk   # the client's tests
@@ -1052,8 +1105,8 @@ Honest scope. These are designed for but not implemented:
 
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.
-- **Deployment** — there is no Dockerfile and no hosted endpoint. The stack
-  runs from `make`, on one machine.
+- **A hosted endpoint.** `docker compose up` runs the whole stack on one
+  machine; nothing is deployed anywhere for customers to call.
 - **An async Python client**, webhook helpers in the SDK, and a JavaScript SDK.
 - **Tally verified against a real installation** — the voucher file is
   well-formed and every voucher balances, but nobody has watched one import

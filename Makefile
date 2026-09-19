@@ -6,8 +6,9 @@ SDK      := clients/python
 PY       := $(BACKEND)/.venv/bin/python
 PIP      := $(BACKEND)/.venv/bin/pip
 
-.PHONY: help setup setup-sdk setup-web up down migrate revision run worker web \
-	build-web test test-sdk test-web lint lint-sdk lint-web purge clean
+.PHONY: help setup setup-sdk setup-web up down stack stack-down stack-logs \
+	migrate revision run worker web build-web test test-pg test-sdk test-web \
+	lint lint-sdk lint-web purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -19,8 +20,17 @@ setup: ## Create the virtualenv and install the backend with dev extras
 	$(PIP) install -e "$(BACKEND)[dev]"
 	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example — fill it in.")
 
-up: ## Start Postgres, Redis and MinIO
-	docker compose up -d
+stack: ## Run everything in Docker — API, worker, dashboard, Postgres
+	docker compose up --build
+
+stack-down: ## Stop it and remove the containers
+	docker compose down
+
+stack-logs: ## Follow the logs
+	docker compose logs -f
+
+up: ## Start only the backing services (Postgres), for host-side development
+	docker compose up -d postgres
 
 down: ## Stop them
 	docker compose down
@@ -50,6 +60,11 @@ build-web: ## Production build of the dashboard
 
 test: ## Run the backend test suite (needs no services)
 	cd $(BACKEND) && .venv/bin/python -m pytest -q
+
+test-pg: ## Run the same suite against PostgreSQL (needs `make up`)
+	# Where the dialect-only bugs are: JSONB, SKIP LOCKED, boolean defaults.
+	cd $(BACKEND) && DOCUPARSE_TEST_DATABASE_URL=$${DOCUPARSE_TEST_DATABASE_URL:-postgresql+asyncpg://docuparse:docuparse@localhost:5432/docuparse} \
+		.venv/bin/python -m pytest -q
 
 setup-sdk: ## Install the Python client in editable mode, with dev extras
 	$(PIP) install -e "$(SDK)[dev]"

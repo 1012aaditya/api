@@ -7,25 +7,30 @@ import httpx
 from app.core.logging import _REDACTED_KEYS, _redact
 
 
-def test_the_migration_matches_the_models() -> None:
-    """A model change without a migration fails here, not in production."""
+async def test_the_migration_matches_the_models() -> None:
+    """A model change without a migration fails here, not in production.
+
+    Runs through the application's own async engine and ``run_sync`` rather
+    than rebuilding a sync URL by hand. The old version stripped "+aiosqlite"
+    off the URL, which silently did nothing to a "+asyncpg" one and handed the
+    async driver to a synchronous engine — so this check could only ever run
+    on SQLite, which is exactly the dialect it is least useful on.
+    """
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
-    from sqlalchemy import create_engine
 
-    from app.core.config import get_settings
+    from app.db.session import get_engine
     from app.models import Base
 
-    sync_url = get_settings().database_url.replace("+aiosqlite", "")
-    engine = create_engine(sync_url)
-    try:
-        with engine.connect() as connection:
-            context = MigrationContext.configure(
-                connection, opts={"compare_type": True, "compare_server_default": True}
-            )
-            diff = compare_metadata(context, Base.metadata)
-    finally:
-        engine.dispose()
+    def compare(connection) -> list:
+        context = MigrationContext.configure(
+            connection, opts={"compare_type": True, "compare_server_default": True}
+        )
+        return compare_metadata(context, Base.metadata)
+
+    async with get_engine().connect() as connection:
+        diff = await connection.run_sync(compare)
+
     assert diff == [], f"models and migrations have drifted: {diff}"
 
 
