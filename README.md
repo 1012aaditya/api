@@ -20,8 +20,8 @@ value is in knowing which fields you can trust.
 > the layer above them — the one that
 > [chases clients for the documents](#chasing-the-documents-in-the-first-place)
 > in the first place, which is what a CA firm actually spends its month doing.
-> Billing is not built, and neither is a real WhatsApp adapter — see
-> [What is not built yet](#what-is-not-built-yet).
+> Billing is not built, and nobody has yet watched a WhatsApp message from it
+> arrive on a phone — see [What is not built yet](#what-is-not-built-yet).
 
 ---
 
@@ -508,18 +508,51 @@ The clients are invented, the GSTINs are checksum-valid and identify no
 registered taxpayer, and no real document is in this repository. The demo uses
 no external credentials and sends no message anywhere.
 
-### What is not built
+### Connecting a real WhatsApp number
 
-**There is no real WhatsApp adapter yet.** The only provider registered in this
-build is the mock, which records messages and sends nothing. A production
-deployment that leaves `WHATSAPP_PROVIDER=mock` is refused at startup rather
-than allowed to report messages as sent that no phone received — the same rule
-that governs extraction without a provider. Connecting a WhatsApp Business
-account means writing one adapter against `WhatsAppProvider` and registering
-it; nothing else in the layer changes.
+```bash
+WHATSAPP_PROVIDER=whatsapp_cloud
+WHATSAPP_PHONE_NUMBER_ID=...      # the number's id, not the number
+WHATSAPP_ACCESS_TOKEN=...         # a permanent system-user token
+WHATSAPP_WEBHOOK_SECRET=...       # so the inbound URL cannot be posted to by anyone
+WHATSAPP_VERIFY_TOKEN=...         # echoed during Meta's one-time handshake
+```
 
-The same is true of voice: the interface and the escalation path are built and
-tested, the adapter for an actual telephony account is not.
+Point the app's webhook at `POST /v1/inbound/whatsapp/{organization_id}`.
+Missing credentials are a configuration error: the app refuses to start rather
+than falling back to something that sends nothing.
+
+**Nothing in this repository has been run against Meta.** The adapter follows
+the Cloud API's documented shapes and is covered by tests against a scripted
+transport, which is not the same as a message arriving on a phone. Send one to
+yourself before pointing it at a client.
+
+Two WhatsApp rules are worth knowing before you do:
+
+- **The 24-hour window.** Free-form text is allowed only within 24 hours of the
+  client's last message — which is exactly the window a reminder falls outside
+  of. Past it, the only thing that may be sent is a template the business had
+  approved beforehand.
+- **So configure a template.** With `WHATSAPP_TEMPLATE_NAME` set, a reminder
+  Meta refuses is re-sent as that template and the chase still happens. Its
+  body must take four variables, in this order, because WhatsApp fills them
+  positionally:
+
+  | | |
+  |---|---|
+  | `{{1}}` | the firm's name |
+  | `{{2}}` | the client's name |
+  | `{{3}}` | the period, e.g. "GST 2026-09" |
+  | `{{4}}` | what is outstanding, e.g. "bank statement and GSTR-2B" |
+
+  The timeline then shows the template's name and those values rather than the
+  free-form wording that was refused — nobody sent that text, so nothing says
+  they did. Without a template configured, the refusal simply stands and the
+  firm sees why.
+
+Voice is the same shape: the interface, the script and the escalation path are
+built and tested, and the adapter for an actual telephony account is not
+written. `VOICE_PROVIDER=mock` is likewise refused in production.
 
 ---
 
@@ -1214,12 +1247,12 @@ repository.
 
 Honest scope. These are designed for but not implemented:
 
-- **A real WhatsApp adapter** — the interface, the inbound webhook, the
-  follow-up ladder and the reply reading are built and tested against a mock
-  that sends nothing. No WhatsApp Business account is connected, and a
-  production deployment using the mock is refused at startup rather than
-  allowed to report messages as sent that nobody received.
-- **A real voice adapter** — same: the escalation path is built, no telephony
+- **A WhatsApp send that anyone has watched arrive.** The Cloud API adapter is
+  written and tested against a scripted transport; no WhatsApp Business account
+  has been connected to it from here. A production deployment left on the mock
+  is refused at startup rather than allowed to report messages as sent that
+  nobody received.
+- **A real voice adapter** — the escalation path is built, no telephony
   account is wired to it.
 - **Billing** — usage tracking is billing-ready; no payment provider is
   integrated.

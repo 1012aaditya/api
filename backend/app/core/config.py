@@ -91,6 +91,19 @@ class Settings(BaseSettings):
     whatsapp_webhook_secret: str | None = None
     voice_provider: str = "mock"
 
+    # --- WhatsApp Cloud API (WHATSAPP_PROVIDER=whatsapp_cloud) ---
+    #: The sending number's id in the WhatsApp Business account, not the
+    #: number itself.
+    whatsapp_phone_number_id: str | None = None
+    #: A permanent system-user token. Never logged, never returned by the API.
+    whatsapp_access_token: str | None = None
+    whatsapp_api_base: str = "https://graph.facebook.com"
+    whatsapp_api_version: str = "v21.0"
+    #: Meta allows free-form text only within 24 hours of the client's last
+    #: message. Outside it, the first contact has to be an approved template.
+    whatsapp_template_name: str | None = None
+    whatsapp_template_language: str = "en"
+
     # --- Upload limits ---
     max_file_size_bytes: int = 20 * 1024 * 1024
     max_page_count: int = 25

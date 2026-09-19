@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from app.core.logging import get_logger
 from app.providers.messaging.base import InboundMessage, SendResult
+from app.providers.messaging.meta import parse_meta_webhook
 from app.utils.ids import prefixed_id
 
 logger = get_logger("docuparse.whatsapp.mock")
@@ -127,53 +128,12 @@ class MockWhatsAppProvider:
             ) from exc
 
     def parse_webhook(self, payload: dict) -> list[InboundMessage]:
-        """Read the shape this mock's own webhooks use.
+        """Read Meta's envelope, with the same parser the real adapter uses.
 
-        Kept close to Meta's envelope — entry → changes → value → messages —
-        so that swapping in the real adapter changes the parsing and nothing
-        that depends on it.
+        Shared on purpose: a mock that parses its own private shape would
+        agree with the tests and disagree with WhatsApp.
         """
-        messages: list[InboundMessage] = []
-        for entry in payload.get("entry", []) or []:
-            for change in entry.get("changes", []) or []:
-                value = change.get("value") or {}
-                for raw in value.get("messages", []) or []:
-                    kind = raw.get("type", "text")
-                    body = None
-                    media_reference = None
-                    filename = None
-                    mime_type = None
-
-                    if kind == "text":
-                        body = (raw.get("text") or {}).get("body")
-                    elif kind in ("document", "image"):
-                        media = raw.get(kind) or {}
-                        media_reference = media.get("id")
-                        filename = media.get("filename")
-                        mime_type = media.get("mime_type")
-                        body = media.get("caption")
-
-                    identifier = raw.get("id")
-                    sender = raw.get("from")
-                    if not identifier or not sender:
-                        # A message with no id cannot be deduplicated and a
-                        # message with no sender cannot be attributed. Skipping
-                        # beats guessing.
-                        continue
-
-                    messages.append(
-                        InboundMessage(
-                            provider_message_id=identifier,
-                            from_phone=sender,
-                            type=kind,
-                            body=body,
-                            media_reference=media_reference,
-                            filename=filename,
-                            mime_type=mime_type,
-                            timestamp=raw.get("timestamp"),
-                        )
-                    )
-        return messages
+        return parse_meta_webhook(payload)
 
     async def aclose(self) -> None:
         return None

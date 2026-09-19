@@ -35,6 +35,7 @@ from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.models import (
     AgentJob,
+    AgentJobStatus,
     AgentJobType,
     CaseStatus,
     Client,
@@ -62,6 +63,12 @@ class FollowUpResult:
     escalated: int = 0
     cancelled: int = 0
     skipped: list[str] = field(default_factory=list)
+    #: Set when the rung did not happen for a reason that may pass — the
+    #: provider was unreachable, the daily cap was already spent. The job goes
+    #: back on the queue instead of being consumed, because a reminder nobody
+    #: sent and nobody retried is a client who never hears from the firm
+    #: again.
+    retry_in_seconds: int | None = None
 
 
 def _next_delay(policy, attempt_number: int) -> tuple[int, str]:
@@ -226,6 +233,10 @@ class FollowUpEngine:
             result.scheduled += 1
         else:
             result.skipped.append(outcome.skipped or "the message was not sent")
+            # Try this same rung again rather than consuming it. Advancing the
+            # ladder would spend a reminder nobody received, and dropping the
+            # job would leave a blocked client nobody is chasing.
+            result.retry_in_seconds = outcome.retry_in_seconds
         return result
 
     async def _place_call(
@@ -266,6 +277,41 @@ class FollowUpEngine:
         return await self.schedule_next(case, attempt_number=already + 1, now=now)
 
 
+async def _report_if_exhausted(db: AsyncSession, job: AgentJob) -> None:
+    """Tell the firm when a rung has stopped being retried.
+
+    A job that ran out of attempts is a client nobody is chasing any more.
+    Left as a failed row in a queue table, that is invisible; the whole point
+    of the product is that it is not.
+    """
+    if job.status != AgentJobStatus.FAILED:
+        return
+
+    from app.repositories.operations import ExceptionRepository
+
+    case = await CaseRepository(db).get(job.organization_id, job.case_id or "")
+    client = (
+        await ClientRepository(db).get(job.organization_id, case.client_id)
+        if case
+        else None
+    )
+    name = client.display_name if client else "a client"
+    await ExceptionRepository(db).raise_exception(
+        organization_id=job.organization_id,
+        client_id=case.client_id if case else None,
+        case_id=job.case_id,
+        type=ExceptionType.OTHER,
+        severity=Severity.HIGH,
+        message=(
+            f"We could not reach {name} on WhatsApp after "
+            f"{job.attempts} attempts: {job.last_error}. Nobody is chasing "
+            "them until someone looks."
+        ),
+        dedupe_key=f"followup_failed:{job.id}",
+        details={"job_type": job.type, "attempts": job.attempts},
+    )
+
+
 async def drain_agent_jobs(
     db: AsyncSession, *, settings: Settings, limit: int = 10, now: dt.datetime | None = None
 ) -> int:
@@ -282,7 +328,16 @@ async def drain_agent_jobs(
         ran += 1
         try:
             result = await engine.run_job(job, now=now)
-            await jobs.mark_done(job, now=now)
+            if result.retry_in_seconds is not None:
+                await jobs.mark_failed(
+                    job,
+                    error="; ".join(result.skipped) or "the rung did not happen",
+                    retry_in_seconds=result.retry_in_seconds,
+                    now=now,
+                )
+                await _report_if_exhausted(db, job)
+            else:
+                await jobs.mark_done(job, now=now)
             await db.commit()
             logger.info(
                 "agent_job.ran",

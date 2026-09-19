@@ -177,6 +177,22 @@ the mock, the store is in memory, and no AI provider is configured.
 `scripts/seed_demo.py` (with `--reset`) is the same product with data in it,
 for showing rather than testing.
 
+### After the twelve days
+
+* **The WhatsApp Cloud API adapter** (`app/providers/messaging/whatsapp_cloud.py`)
+  — the only thing standing between this and a real firm's clients. Written
+  against Meta's documented shapes and tested against a scripted transport.
+  Never run against Meta from here, which is stated in the README rather than
+  glossed over.
+* **A rung that did not happen goes back on the queue.** A send refused for
+  quiet hours or the daily cap, or a provider that could not be reached, used
+  to consume its job: the ladder stopped silently and nobody chased that
+  client again. It is now requeued for when the obstacle passes — after the
+  quiet window, tomorrow, or in fifteen minutes — and a rung that runs out of
+  attempts raises an exception naming the client nobody is chasing.
+* **Both list pages page**, because the brief's own 50–500 clients would
+  otherwise have silently shown the first two hundred.
+
 ### Not done, and worth saying plainly
 
 * No AI provider key exists in this environment, so extraction has only ever
@@ -184,4 +200,8 @@ for showing rather than testing.
   claimed (§30, §33).
 * `docker compose up` has never been executed here — the registry is blocked
   from this container. The files are written and reviewed, not run.
-* The PostgreSQL test-harness flake in §6b is still unexplained.
+* No WhatsApp message from this code has been watched arriving on a phone.
+  The adapter is written and unit-tested; a scripted transport is not Meta.
+* The PostgreSQL test-harness flake in §6b is still unexplained. It did not
+  reproduce in three consecutive full runs against PostgreSQL at the end of
+  this work, which is evidence of nothing except that it is intermittent.

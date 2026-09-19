@@ -599,3 +599,165 @@ def test_the_mock_voice_provider_is_refused_in_production() -> None:
 
     with pytest.raises(VoiceUnavailableError):
         build_provider(production_settings(voice_provider="mock"))
+
+
+# --- WhatsApp's 24-hour window ------------------------------------------
+
+
+class WindowClosedProvider:
+    """A provider that refuses free text and accepts templates.
+
+    What Meta does more than 24 hours after a client's last message, which is
+    exactly when a reminder falls due.
+    """
+
+    name = "window-closed"
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+        self.templates: list[tuple[str, dict[str, str]]] = []
+        self.template_ok = True
+
+    async def send_message(self, *, to: str, body: str):
+        from app.providers.messaging.base import SendResult
+
+        self.texts.append(body)
+        return SendResult(
+            ok=False,
+            error="(#131047) Re-engagement message",
+            details={"code": 131047, "permanent": True, "needs_template": True},
+        )
+
+    async def send_template(self, *, to: str, template: str, variables: dict[str, str]):
+        from app.providers.messaging.base import SendResult
+
+        self.templates.append((template, dict(variables)))
+        if not self.template_ok:
+            return SendResult(ok=False, error="Template not approved.", details={})
+        return SendResult(ok=True, provider_message_id="wamid.template")
+
+    async def send_document(self, **_kwargs):  # pragma: no cover - unused here
+        raise AssertionError("not used")
+
+    async def fetch_media(self, media_reference: str) -> bytes:  # pragma: no cover
+        raise AssertionError("not used")
+
+    def parse_webhook(self, payload: dict) -> list:  # pragma: no cover
+        return []
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def agent_with(provider, *, template: str | None):
+    """An agent whose messaging service uses this provider and template."""
+    from app.core.config import get_settings
+
+    settings = get_settings().model_copy(update={"whatsapp_template_name": template})
+    return settings, provider
+
+
+async def test_a_closed_window_falls_back_to_the_approved_template(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    client = await make_client(tenant, whatsapp_phone=PHONE)
+    case = await make_case(tenant, client.id)
+    provider = WindowClosedProvider()
+    settings, _ = await agent_with(provider, template="document_reminder")
+
+    async with get_session_factory()() as session:
+        messaging = MessagingService(session, settings=settings, provider=provider)
+        agent = ClientCommunicationAgent(
+            session,
+            AgentContext(organization_id=tenant.organization_id),
+            messaging=messaging,
+        )
+        result = await agent.request_missing_documents(
+            await session.get(ComplianceCase, case.id), firm_name="Sharma & Associates"
+        )
+        await session.commit()
+
+    assert result.messages_sent == 1, "the reminder still happened"
+    assert provider.texts, "free text is tried first, while the window may be open"
+    assert provider.templates, "and the template is what actually goes out"
+
+    name, variables = provider.templates[0]
+    assert name == "document_reminder"
+    assert list(variables) == ["firm", "client", "period", "documents"], (
+        "WhatsApp fills template variables positionally, so the order is the contract"
+    )
+    assert "bank statement" in variables["documents"]
+
+    async with get_session_factory()() as session:
+        from sqlalchemy import select
+
+        message = (
+            await session.execute(select(Message).where(Message.direction == "outbound"))
+        ).scalar_one()
+        requirements = await RequirementRepository(session).for_case(
+            tenant.organization_id, case.id
+        )
+
+    assert message.type == "template"
+    assert "document_reminder" in message.body
+    assert "we still need" not in message.body.lower(), (
+        "the refused wording must not be written down as though it was sent"
+    )
+    assert any(r.status == RequirementStatus.REQUESTED for r in requirements)
+
+
+async def test_without_an_approved_template_the_refusal_stands(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    client = await make_client(tenant, whatsapp_phone=PHONE)
+    case = await make_case(tenant, client.id)
+    provider = WindowClosedProvider()
+    settings, _ = await agent_with(provider, template=None)
+
+    async with get_session_factory()() as session:
+        messaging = MessagingService(session, settings=settings, provider=provider)
+        agent = ClientCommunicationAgent(
+            session,
+            AgentContext(organization_id=tenant.organization_id),
+            messaging=messaging,
+        )
+        result = await agent.request_missing_documents(
+            await session.get(ComplianceCase, case.id), firm_name="Sharma & Associates"
+        )
+        await session.commit()
+
+    assert result.messages_sent == 0
+    assert provider.templates == []
+    assert result.retry_in_seconds is None, "retrying a closed window cannot help"
+
+    async with get_session_factory()() as session:
+        requirements = await RequirementRepository(session).for_case(
+            tenant.organization_id, case.id
+        )
+    assert all(r.status != RequirementStatus.REQUESTED for r in requirements), (
+        "nothing was asked for, so nothing may say it was"
+    )
+
+
+async def test_a_template_that_also_fails_is_not_reported_as_sent(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    client = await make_client(tenant, whatsapp_phone=PHONE)
+    case = await make_case(tenant, client.id)
+    provider = WindowClosedProvider()
+    provider.template_ok = False
+    settings, _ = await agent_with(provider, template="document_reminder")
+
+    async with get_session_factory()() as session:
+        messaging = MessagingService(session, settings=settings, provider=provider)
+        agent = ClientCommunicationAgent(
+            session,
+            AgentContext(organization_id=tenant.organization_id),
+            messaging=messaging,
+        )
+        result = await agent.request_missing_documents(
+            await session.get(ComplianceCase, case.id), firm_name="Sharma & Associates"
+        )
+        await session.commit()
+
+    assert result.messages_sent == 0

@@ -500,3 +500,127 @@ async def test_a_job_a_dead_worker_left_is_requeued(tenant: Tenant) -> None:
     async with get_session_factory()() as session:
         row = await session.get(AgentJob, job.id)
     assert row.status == AgentJobStatus.QUEUED
+
+
+# --- a rung that did not happen ----------------------------------------
+
+
+async def chase_once(tenant: Tenant, case_id: str, *, now: dt.datetime) -> None:
+    async with get_session_factory()() as session:
+        await FollowUpEngine(session).start_chasing(
+            await session.get(ComplianceCase, case_id), now=now
+        )
+        await session.commit()
+
+
+async def drain_at(now: dt.datetime) -> int:
+    from app.core.config import get_settings
+
+    async with get_session_factory()() as session:
+        ran = await drain_agent_jobs(session, settings=get_settings(), now=now)
+        await session.commit()
+        return ran
+
+
+async def jobs_for(tenant: Tenant, case_id: str) -> list[AgentJob]:
+    async with get_session_factory()() as session:
+        from sqlalchemy import select
+
+        rows = await session.execute(
+            select(AgentJob).where(
+                AgentJob.organization_id == tenant.organization_id,
+                AgentJob.case_id == case_id,
+            )
+        )
+        return list(rows.scalars().all())
+
+
+async def test_quiet_hours_postpone_the_rung_rather_than_spend_it(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    """A reminder that came due at 2am is still owed at 9am.
+
+    Consuming the job would mean the client never hears from the firm again
+    on this case — the ladder would simply stop, silently.
+    """
+    _client, case = await setup_blocked_case(tenant)
+    await policy_for(tenant, quiet_hours_start=21, quiet_hours_end=9)
+    await chase_once(tenant, case.id, now=DAY0)
+
+    middle_of_the_night = DAY0.replace(hour=2) + dt.timedelta(days=2)
+    assert await drain_at(middle_of_the_night) == 1
+    assert whatsapp.sent == [], "nothing goes out at two in the morning"
+
+    jobs = await jobs_for(tenant, case.id)
+    assert len(jobs) == 1, "the rung was not replaced by the next one"
+    assert jobs[0].status == AgentJobStatus.QUEUED
+    assert jobs[0].available_at == middle_of_the_night.replace(hour=9)
+
+    # And when it comes round again after the window, it goes.
+    assert await drain_at(middle_of_the_night.replace(hour=9, minute=30)) == 1
+    assert len(whatsapp.sent) == 1
+
+
+async def test_the_daily_cap_postpones_until_tomorrow(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    _client, case = await setup_blocked_case(tenant)
+    await policy_for(tenant, max_messages_per_day=0, quiet_hours_start=0, quiet_hours_end=0)
+    await chase_once(tenant, case.id, now=DAY0)
+
+    due = DAY0 + dt.timedelta(hours=25)
+    await drain_at(due)
+
+    assert whatsapp.sent == []
+    jobs = await jobs_for(tenant, case.id)
+    assert jobs[0].status == AgentJobStatus.QUEUED
+    assert jobs[0].available_at == due.replace(hour=0, minute=0) + dt.timedelta(days=1)
+
+
+async def test_a_client_who_opted_out_is_not_retried(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    """Waiting changes nothing about an opt-out, so nothing waits."""
+    client, case = await setup_blocked_case(tenant)
+    await chase_once(tenant, case.id, now=DAY0)
+
+    async with get_session_factory()() as session:
+        row = await session.get(Client, client.id)
+        row.allow_automated_contact = False
+        await session.commit()
+
+    await drain_at(DAY0 + dt.timedelta(hours=25))
+
+    jobs = await jobs_for(tenant, case.id)
+    assert whatsapp.sent == []
+    assert all(job.status != AgentJobStatus.QUEUED for job in jobs)
+
+
+async def test_a_rung_that_runs_out_of_attempts_is_reported_to_the_firm(
+    tenant: Tenant, whatsapp: MockWhatsAppProvider
+) -> None:
+    """A failed row in a queue table is nobody's problem until it is someone's.
+
+    The product's promise is that the firm knows who is not being chased.
+    """
+    _client, case = await setup_blocked_case(tenant)
+    await policy_for(tenant, max_messages_per_day=0, quiet_hours_start=0, quiet_hours_end=0)
+    await chase_once(tenant, case.id, now=DAY0)
+
+    now = DAY0 + dt.timedelta(hours=25)
+    for _ in range(5):
+        if await drain_at(now) == 0:
+            break
+        now += dt.timedelta(days=1, hours=1)
+
+    jobs = await jobs_for(tenant, case.id)
+    assert any(job.status == AgentJobStatus.FAILED for job in jobs), (
+        "the job should give up rather than retry for ever"
+    )
+
+    async with get_session_factory()() as session:
+        items = await ExceptionRepository(session).list_for_organization(
+            tenant.organization_id
+        )
+    messages = [item.message for item in items]
+    assert any("could not reach" in message for message in messages), messages

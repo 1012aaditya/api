@@ -53,7 +53,7 @@ from app.repositories.operations import (
     TaskRepository,
 )
 from app.services.intent import Intent, IntentReading
-from app.services.messaging import MessagingService
+from app.services.messaging import MessagingService, TemplateFallback
 from app.utils.ids import prefixed_id
 
 logger = get_logger("docuparse.agent")
@@ -84,6 +84,10 @@ class AgentResult:
     exceptions_raised: int = 0
     tasks_created: int = 0
     skipped: str | None = None
+    #: Set when the thing that stopped this — quiet hours, the daily cap, a
+    #: provider that was unreachable — will not be there later. The caller
+    #: puts the work back on the queue instead of consuming it.
+    retry_in_seconds: int | None = None
 
     @property
     def did_something(self) -> bool:
@@ -229,6 +233,32 @@ class ClientCommunicationAgent:
 
     # -- workflow: ask for what is missing -------------------------------
 
+    def _reminder_template(
+        self,
+        client: Client,
+        case: ComplianceCase,
+        missing: list[DocumentRequirement],
+        *,
+        firm_name: str,
+    ) -> TemplateFallback | None:
+        """The approved template to fall back on, when the firm has one.
+
+        The variables are positional in WhatsApp, so this order is part of
+        the template's definition: firm, client, period, documents.
+        """
+        name = self._messaging.template_name
+        if not name:
+            return None
+        return TemplateFallback(
+            name=name,
+            variables={
+                "firm": firm_name,
+                "client": client.display_name,
+                "period": f"{case.type.upper()} {case.period}",
+                "documents": describe_missing(missing),
+            },
+        )
+
     async def request_missing_documents(
         self,
         case: ComplianceCase,
@@ -259,16 +289,18 @@ class ClientCommunicationAgent:
             return result
 
         body = compose_request(firm_name=firm_name, case=case, missing=missing)
-        message = await self._messaging.send(
+        attempt = await self._messaging.send_with_reason(
             client,
             body,
             case_id=case.id,
             actor_type=self._ctx.actor_type,
             actor_id=self._ctx.actor_id,
             now=now,
+            template=self._reminder_template(client, case, missing, firm_name=firm_name),
         )
-        if message is None or message.status == "failed":
-            result.skipped = "The message was not sent."
+        if not attempt.ok:
+            result.skipped = attempt.reason or "The message was not sent."
+            result.retry_in_seconds = attempt.retry_in_seconds
             return result
 
         # The requirements are marked requested only after a send succeeded.
@@ -421,7 +453,11 @@ class ClientCommunicationAgent:
                         f"{describe_missing(missing)}. Send whichever you have and "
                         "we'll take it from there."
                     )
-                    sent = await self._messaging.send(
+                    # `.ok`, not "a row came back": a failed send still
+                    # writes a message row, and counting that as an answer
+                    # would tell the CA their client was told something they
+                    # were not.
+                    attempt = await self._messaging.send_with_reason(
                         client,
                         body,
                         case_id=case.id,
@@ -429,7 +465,7 @@ class ClientCommunicationAgent:
                         actor_id=self._ctx.actor_id,
                         now=now,
                     )
-                    if sent is not None:
+                    if attempt.ok:
                         result.messages_sent += 1
                         result.actions.append("Explained what is still needed")
                         await self._db.flush()

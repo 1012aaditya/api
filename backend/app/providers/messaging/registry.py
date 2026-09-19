@@ -25,8 +25,32 @@ class MessagingUnavailableError(DocuParseError):
     status_code = 503
 
 
+def _cloud(settings: Settings) -> WhatsAppProvider:
+    """Build the Cloud API adapter, or refuse to.
+
+    Missing credentials are a configuration error, not a reason to fall back
+    to something that sends nothing (§42).
+    """
+    from app.providers.messaging.whatsapp_cloud import WhatsAppCloudProvider
+
+    missing = [
+        name
+        for name, value in (
+            ("WHATSAPP_PHONE_NUMBER_ID", settings.whatsapp_phone_number_id),
+            ("WHATSAPP_ACCESS_TOKEN", settings.whatsapp_access_token),
+        )
+        if not value
+    ]
+    if missing:
+        raise MessagingUnavailableError(
+            f"WHATSAPP_PROVIDER=whatsapp_cloud needs {' and '.join(missing)}."
+        )
+    return WhatsAppCloudProvider(settings)
+
+
 _FACTORIES: dict[str, ProviderFactory] = {
     "mock": lambda _settings: MockWhatsAppProvider(),
+    "whatsapp_cloud": _cloud,
 }
 
 _instance: WhatsAppProvider | None = None

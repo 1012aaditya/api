@@ -61,6 +61,68 @@ class SendDecision:
     code: str | None = None
 
 
+@dataclass(frozen=True)
+class SendAttempt:
+    """What came of one attempt to send, and whether trying again could help.
+
+    The follow-up engine needs the difference. "Quiet hours" passes by
+    itself; "the client opted out" does not, and a ladder that retried it
+    would spend its attempts on a refusal it already understands.
+    """
+
+    message: Message | None
+    ok: bool
+    code: str | None = None
+    reason: str | None = None
+    #: Seconds to wait before this same rung is worth trying again, or None
+    #: when nothing about waiting would change the answer.
+    retry_in_seconds: int | None = None
+
+
+@dataclass(frozen=True)
+class TemplateFallback:
+    """What to send when a provider will not carry free-form text.
+
+    WhatsApp allows free text only within 24 hours of the client's last
+    message, which is exactly the window a reminder falls outside of. Past
+    it, the only thing that may be sent is a template the business had
+    approved beforehand, with its variables filled positionally — so the
+    order of this dict is the order of the template's placeholders.
+    """
+
+    name: str
+    variables: dict[str, str]
+
+    def describe(self) -> str:
+        """What to write on the timeline.
+
+        Not the message text: the wording lives in Meta's approved template,
+        and inventing an approximation of it here would put words on the
+        firm's timeline that nobody sent (§28).
+        """
+        values = ", ".join(str(value) for value in self.variables.values())
+        return f"(approved template “{self.name}”{f': {values}' if values else ''})"
+
+
+#: Codes where the obstacle is the clock, not the client or the firm.
+_WAITABLE = {"quiet_hours", "daily_cap"}
+
+#: How long to wait on a provider that failed for a reason that may pass.
+PROVIDER_RETRY_SECONDS = 900
+
+
+def _seconds_until_hour(now: dt.datetime, hour: int) -> int:
+    """Seconds from ``now`` to the next time it is ``hour``:00."""
+    target = now.replace(hour=hour % 24, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += dt.timedelta(days=1)
+    return max(60, int((target - now).total_seconds()))
+
+
+def _seconds_until_tomorrow(now: dt.datetime) -> int:
+    return max(60, int((_start_of_day(now) + dt.timedelta(days=1) - now).total_seconds()))
+
+
 def _start_of_day(now: dt.datetime) -> dt.datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -92,6 +154,7 @@ class MessagingService:
     ) -> None:
         self._db = db
         self._settings = settings or get_settings()
+
         self._provider = provider
         self._events = AgentEventRepository(db)
 
@@ -100,6 +163,11 @@ class MessagingService:
         return self._provider or get_provider()
 
     # -- may we? --------------------------------------------------------
+
+    @property
+    def template_name(self) -> str | None:
+        """The approved template used to reopen a conversation, if any."""
+        return self._settings.whatsapp_template_name
 
     async def may_send(
         self,
@@ -202,13 +270,38 @@ class MessagingService:
         actor_id: str | None = None,
         now: dt.datetime | None = None,
     ) -> Message | None:
-        """Send, or record why not. Returns None when refused.
+        """Send, or record why not. Returns None when refused."""
+        attempt = await self.send_with_reason(
+            client,
+            body,
+            case_id=case_id,
+            automated=automated,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            now=now,
+        )
+        return attempt.message
+
+    async def send_with_reason(
+        self,
+        client: Client,
+        body: str,
+        *,
+        case_id: str | None = None,
+        automated: bool = True,
+        actor_type: str = ActorType.AGENT,
+        actor_id: str | None = None,
+        now: dt.datetime | None = None,
+        template: TemplateFallback | None = None,
+    ) -> SendAttempt:
+        """Send, or record why not, and say whether waiting would help.
 
         The refusal is written to the timeline rather than raised, because
         "we held this back because the client opted out" is a normal outcome
         the firm should see, not an error anybody needs to catch.
         """
-        decision = await self.may_send(client, now=now, automated=automated)
+        moment = now or utcnow()
+        decision = await self.may_send(client, now=moment, automated=automated)
         if not decision.allowed:
             await self._events.record(
                 organization_id=client.organization_id,
@@ -222,23 +315,42 @@ class MessagingService:
                 created_at=now,
             )
             logger.info("whatsapp.withheld", code=decision.code)
-            return None
+            return SendAttempt(
+                message=None,
+                ok=False,
+                code=decision.code,
+                reason=decision.reason,
+                retry_in_seconds=await self._wait_for(client, decision, now=moment),
+            )
 
         conversation = await self.conversation_for(client)
         destination = client.whatsapp_phone or client.phone or ""
         result = await self.provider.send_message(to=destination, body=body)
 
-        # One clock for the row, the conversation and the event. Taking
-        # utcnow() here and again below would put a message in the timeline at
-        # a different moment from the event that records it.
-        moment = now or utcnow()
+        kind = MessageType.TEXT
+        if not result.ok and result.details.get("needs_template") and template is not None:
+            # The window has closed. The approved template is the only thing
+            # that may go out, so the reminder happens — it just has different
+            # words, and the timeline says so rather than showing the text
+            # that was refused.
+            fallback = await self.provider.send_template(
+                to=destination, template=template.name, variables=template.variables
+            )
+            if fallback.ok:
+                result = fallback
+                kind = MessageType.TEMPLATE
+                body = template.describe()
+
+        # One clock for the row, the conversation and the event: taking
+        # utcnow() twice would put a message in the timeline at a different
+        # moment from the event that records it.
         message = Message(
             organization_id=client.organization_id,
             conversation_id=conversation.id,
             client_id=client.id,
             case_id=case_id,
             direction=Direction.OUTBOUND,
-            type=MessageType.TEXT,
+            type=kind,
             body=body,
             provider=getattr(self.provider, "name", None),
             provider_message_id=result.provider_message_id,
@@ -276,7 +388,36 @@ class MessagingService:
             created_at=moment,
         )
         await self._db.flush()
-        return message
+
+        if result.ok:
+            return SendAttempt(message=message, ok=True)
+
+        # A provider that said no permanently — the number is not on
+        # WhatsApp, the 24-hour window has closed — is not worth retrying;
+        # somebody has to change something first.
+        permanent = bool(result.details.get("permanent"))
+        return SendAttempt(
+            message=message,
+            ok=False,
+            code="provider_permanent" if permanent else "provider_failed",
+            reason=result.error,
+            retry_in_seconds=None if permanent else PROVIDER_RETRY_SECONDS,
+        )
+
+    async def _wait_for(
+        self, client: Client, decision: SendDecision, *, now: dt.datetime
+    ) -> int | None:
+        if decision.code not in _WAITABLE:
+            return None
+        policy = await AgentPolicyRepository(self._db).get_or_create(
+            client.organization_id
+        )
+        if decision.code == "quiet_hours":
+            # Just after the window ends, not in fifteen minutes: three
+            # retries through the night would exhaust the job's attempts
+            # without a single message going out.
+            return _seconds_until_hour(now, policy.quiet_hours_end)
+        return _seconds_until_tomorrow(now)
 
     # -- inbound --------------------------------------------------------
 
