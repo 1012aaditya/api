@@ -137,8 +137,8 @@ implicated by any evidence gathered so far.
 | 3 | `DocumentRequirement` + state machines | **done** |
 | 4 | Ingestion: classify → extract → validate, attached to a case | **done** |
 | 5 | Exception engine | **done** |
-| 6 | WhatsApp abstraction + mock provider + inbound webhook | |
-| 7 | Client communication agent + tools | |
+| 6 | WhatsApp abstraction + mock provider + inbound webhook | **done** |
+| 7 | Client communication agent + tools | **done** |
 | 8 | Follow-up engine (`agent_jobs`) | |
 | 9 | Voice abstraction + mock workflow | |
 | 10 | CA command centre | |

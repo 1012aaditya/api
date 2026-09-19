@@ -29,6 +29,7 @@ def _build_v1_router() -> APIRouter:
         batches,
         documents,
         exports,
+        inbound,
         invoices,
         jobs,
         tally,
@@ -46,6 +47,7 @@ def _build_v1_router() -> APIRouter:
     router.include_router(batches.router)
     router.include_router(exports.router)
     router.include_router(tally.router)
+    router.include_router(inbound.router)
     router.include_router(webhooks.router)
     return router
 

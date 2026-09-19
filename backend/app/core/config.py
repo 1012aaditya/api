@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     # the queue after this long.
     job_stale_after_seconds: int = 900
 
+    # --- Client messaging (§7) ---
+    #: "mock" records messages without sending them — what demo mode and the
+    #: tests use. A real adapter is named here once one exists. There is no
+    #: automatic fallback: silently sending nothing is worse than refusing.
+    whatsapp_provider: str = "mock"
+    whatsapp_verify_token: str | None = None
+    #: Shared secret for verifying inbound webhook signatures.
+    whatsapp_webhook_secret: str | None = None
+    voice_provider: str = "mock"
+
     # --- Upload limits ---
     max_file_size_bytes: int = 20 * 1024 * 1024
     max_page_count: int = 25

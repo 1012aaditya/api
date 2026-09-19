@@ -223,6 +223,7 @@ class AgentEventRepository:
         entity_id: str | None = None,
         details: dict | None = None,
         run_id: str | None = None,
+        created_at: dt.datetime | None = None,
     ) -> AgentEvent:
         event = AgentEvent(
             organization_id=organization_id,
@@ -236,6 +237,10 @@ class AgentEventRepository:
             entity_id=entity_id,
             details=details or {},
             run_id=run_id,
+            # Stamped from the caller's clock when it supplies one, so that an
+            # event and the window that counts it agree. The daily cap reads
+            # these rows; a cap counted on a different clock counts nothing.
+            **({"created_at": created_at} if created_at is not None else {}),
         )
         self.session.add(event)
         await self.session.flush()
