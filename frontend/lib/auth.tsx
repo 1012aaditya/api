@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { ApiRequestError, apiGet, apiSend, setToken } from "./api";
+import { ApiRequestError, apiGet, apiSend, getToken, setToken } from "./api";
 import type { TokenResponse, UserProfile } from "./types";
 
 interface AuthState {
@@ -35,6 +35,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   const refresh = useCallback(async () => {
+    // With no token there is nobody to fetch. Asking anyway spends a request
+    // on a guaranteed 401 and puts a red error in the console of every
+    // signed-out visitor, on a page where being signed out is the norm.
+    if (getToken() === null) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
     try {
       setUser(await apiGet<UserProfile>("/v1/auth/me"));
     } catch (error) {
