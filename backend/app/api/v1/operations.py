@@ -317,7 +317,7 @@ async def create_case(
             status=case.status,
             created_at=case.created_at,
             requirements=[_requirement_out(r) for r in rows],
-            outstanding=[r.document_type for r in rows if r.is_outstanding],
+            outstanding=[DocumentType.label(r.document_type) for r in rows if r.is_outstanding],
         ),
     )
 
@@ -357,7 +357,7 @@ async def list_cases(
                 status=case.status,
                 created_at=case.created_at,
                 requirements=[_requirement_out(r) for r in rows],
-                outstanding=[r.document_type for r in rows if r.is_outstanding],
+                outstanding=[DocumentType.label(r.document_type) for r in rows if r.is_outstanding],
             )
         )
     return SuccessResponse(request_id=request_id, data=out)
@@ -397,7 +397,7 @@ async def get_case(
             status=case.status,
             created_at=case.created_at,
             requirements=[_requirement_out(r) for r in rows],
-            outstanding=[r.document_type for r in rows if r.is_outstanding],
+            outstanding=[DocumentType.label(r.document_type) for r in rows if r.is_outstanding],
             open_exceptions=len(open_exceptions),
         ),
     )

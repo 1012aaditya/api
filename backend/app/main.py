@@ -95,7 +95,10 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=["*"] if not settings.is_production else [settings.app_url],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        # Every method the app actually routes has to be listed, or the
+        # browser's preflight fails and the dashboard sees a network error
+        # with no status. tests/test_cors.py keeps this list honest.
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
         expose_headers=["X-Request-Id", "Retry-After"],
     )

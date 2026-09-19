@@ -2,6 +2,7 @@
 """Seed a demonstrable firm.
 
     python scripts/seed_demo.py
+    python scripts/seed_demo.py --reset   # tear the firm down and build it again
 
 Creates one CA firm with ten clients in the states a real practice is
 actually in on any given day: some blocked, some chased, one that opted out,
@@ -24,12 +25,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
+from sqlalchemy import delete  # noqa: E402
+
 from app.core.config import get_settings  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.base import utcnow  # noqa: E402
 from app.db.session import dispose_engine, get_session_factory  # noqa: E402
 from app.models import (  # noqa: E402
     ActorType,
+    Base,
     CaseStatus,
     ContactState,
     Document,
@@ -81,7 +85,26 @@ CLIENTS = [
 ]
 
 
-async def seed() -> None:
+async def tear_down(session, organization_id: str) -> None:
+    """Delete everything belonging to one organization.
+
+    Walks the metadata rather than naming twelve tables, so a table added
+    later is cleared too instead of holding a foreign key that makes the
+    next reset fail.
+    """
+    for table in reversed(Base.metadata.sorted_tables):
+        column = table.columns.get("organization_id")
+        if column is not None:
+            await session.execute(delete(table).where(column == organization_id))
+    await session.execute(
+        delete(Base.metadata.tables["organizations"]).where(
+            Base.metadata.tables["organizations"].c.id == organization_id
+        )
+    )
+    await session.commit()
+
+
+async def seed(*, reset: bool = False) -> None:
     settings = get_settings()
     set_provider(MockWhatsAppProvider())
     now = utcnow()
@@ -89,9 +112,15 @@ async def seed() -> None:
     async with get_session_factory()() as session:
         organizations = OrganizationRepository(session)
         existing = await organizations.get_by_slug("sharma-associates")
-        if existing is not None:
-            print(f"The demo firm already exists ({existing.id}). Nothing to do.")
+        if existing is not None and not reset:
+            print(
+                f"The demo firm already exists ({existing.id}). Nothing to do.\n"
+                "Pass --reset to tear it down and build it again."
+            )
             return
+        if existing is not None:
+            await tear_down(session, existing.id)
+            print(f"Removed the previous demo firm ({existing.id}).")
 
         organization = await organizations.create(name=FIRM)
         await UserRepository(session).create(
@@ -100,9 +129,12 @@ async def seed() -> None:
             password_hash=hash_password(PASSWORD),
             full_name="Anita Sharma",
         )
+        # Voice stays off, as it is for every new firm (§17). A demo that
+        # ships with calls enabled implies a configured voice provider, and
+        # there is none — the CA turns it on themselves once there is.
         await AgentPolicyRepository(session).update(
             organization.id,
-            {"allow_voice_calls": True, "max_messages_per_day": 200},
+            {"max_messages_per_day": 200},
         )
         await session.commit()
 
@@ -420,7 +452,7 @@ async def seed() -> None:
 
 async def main() -> None:
     try:
-        await seed()
+        await seed(reset="--reset" in sys.argv[1:])
     finally:
         await dispose_engine()
 

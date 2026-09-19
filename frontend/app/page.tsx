@@ -12,7 +12,7 @@ export default function Home() {
 
   useEffect(() => {
     if (loading) return;
-    router.replace(user ? "/dashboard" : "/login");
+    router.replace(user ? "/command-centre" : "/login");
   }, [user, loading, router]);
 
   return (

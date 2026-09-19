@@ -358,3 +358,162 @@ export interface TallyPreview {
   unmatched_suppliers: UnmatchedSupplier[];
   vouchers: VoucherPreview[];
 }
+
+/* --- CA operations ---------------------------------------------------
+ *
+ * These mirror `backend/app/schemas/operations.py`. The state strings are
+ * left as the API sends them; the dashboard maps them to words and colours
+ * in one place (`lib/practice.ts`) rather than inventing its own states.
+ */
+
+export interface PracticeClient {
+  id: string;
+  name: string;
+  business_name: string | null;
+  client_code: string | null;
+  phone: string | null;
+  whatsapp_phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  pan: string | null;
+  status: string;
+  preferred_channel: string;
+  preferred_language: string;
+  allow_automated_contact: boolean;
+  automation_paused_reason: string | null;
+  contact_state: string;
+  last_contacted_at: string | null;
+  last_response_at: string | null;
+  created_at: string;
+  open_cases: number;
+  blocked_cases: number;
+}
+
+export interface Requirement {
+  id: string;
+  document_type: string;
+  label: string;
+  required: boolean;
+  status: string;
+  reason: string | null;
+  received_document_id: string | null;
+  requested_at: string | null;
+  received_at: string | null;
+}
+
+export interface ComplianceCase {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  type: string;
+  period: string;
+  label: string;
+  deadline: string | null;
+  status: string;
+  created_at: string;
+  requirements: Requirement[];
+  outstanding: string[];
+  open_exceptions: number;
+}
+
+export interface ReviewException {
+  id: string;
+  type: string;
+  severity: string;
+  message: string;
+  status: string;
+  client_id: string | null;
+  client_name: string | null;
+  case_id: string | null;
+  document_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface PracticeTask {
+  id: string;
+  title: string;
+  description: string | null;
+  priority: string;
+  status: string;
+  client_id: string | null;
+  client_name: string | null;
+  case_id: string | null;
+  due_at: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface AgentEvent {
+  id: string;
+  actor_type: string;
+  action: string;
+  summary: string;
+  client_id: string | null;
+  client_name: string | null;
+  case_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  direction: string;
+  type: string;
+  body: string | null;
+  status: string;
+  detected_intent: string | null;
+  sent_by_agent: boolean;
+  created_at: string;
+}
+
+export interface Conversation {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  channel: string;
+  status: string;
+  last_message_at: string | null;
+  messages: ConversationMessage[];
+}
+
+export interface CommandCentre {
+  clients_total: number;
+  clients_blocked: number;
+  cases_blocked: number;
+  cases_ready: number;
+  cases_completed: number;
+  documents_awaiting_review: number;
+  exceptions_open: number;
+  tasks_open: number;
+  tasks_overdue: number;
+  calls_required: number;
+  messages_sent_today: number;
+  message_limit_per_day: number;
+  agent_enabled: boolean;
+}
+
+export interface AgentPolicy {
+  enabled: boolean;
+  allow_whatsapp: boolean;
+  allow_voice_calls: boolean;
+  allow_auto_followup: boolean;
+  allow_auto_escalation: boolean;
+  max_messages_per_day: number;
+  max_calls_per_day: number;
+  max_followups_per_case: number;
+  first_reminder_hours: number;
+  second_reminder_hours: number;
+  voice_call_after_hours: number;
+  classification_threshold: string;
+  local_ai_only: boolean;
+  quiet_hours_start: number;
+  quiet_hours_end: number;
+}
+
+export interface AgentRunResult {
+  scheduled: number;
+  sent: number;
+  skipped: string[];
+}

@@ -93,6 +93,7 @@ class CaseOut(BaseModel):
     status: str
     created_at: dt.datetime
     requirements: list[RequirementOut] = Field(default_factory=list)
+    #: Labels, not slugs — this list is read by the firm, not by code.
     outstanding: list[str] = Field(default_factory=list)
     open_exceptions: int = 0
 
