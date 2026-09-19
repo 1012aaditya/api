@@ -63,13 +63,39 @@ async def flush_webhooks(settings: Settings, *, client: httpx.AsyncClient) -> di
         return await deliver_due(session, settings=settings, client=client, limit=20)
 
 
+async def process_agent_jobs(settings: Settings, *, limit: int) -> int:
+    """Drain the agent's queue: follow-ups, calls, case re-checks.
+
+    A second queue rather than a second worker. ``extraction_jobs`` requires a
+    document and ``agent_jobs`` does not, so they are separate tables — but
+    one process claims from both, because a deployment that needs two workers
+    to function is a deployment where somebody eventually starts only one.
+    """
+    from app.services.followup import drain_agent_jobs
+
+    async with get_session_factory()() as session:
+        return await drain_agent_jobs(session, settings=settings, limit=limit)
+
+
+async def release_stale_agent_jobs(settings: Settings) -> int:
+    from app.repositories.agent_jobs import AgentJobRepository
+
+    cutoff = utcnow() - dt.timedelta(seconds=settings.job_stale_after_seconds)
+    async with get_session_factory()() as session:
+        released = await AgentJobRepository(session).release_stale(older_than=cutoff)
+        await session.commit()
+        return released
+
+
 async def run_once(
     settings: Settings | None = None, *, client: httpx.AsyncClient | None = None
 ) -> dict[str, int]:
     """A single pass. Exposed so tests can drive the worker deterministically."""
     settings = settings or get_settings()
     released = await release_stale_jobs(settings)
+    released += await release_stale_agent_jobs(settings)
     jobs = await process_available_jobs(settings, limit=settings.worker_batch_size)
+    agent_jobs = await process_agent_jobs(settings, limit=settings.worker_batch_size)
 
     owned = client is None
     http = client or httpx.AsyncClient()
@@ -79,7 +105,7 @@ async def run_once(
         if owned:
             await http.aclose()
 
-    return {"released": released, "jobs": jobs, **deliveries}
+    return {"released": released, "jobs": jobs, "agent_jobs": agent_jobs, **deliveries}
 
 
 async def run_forever(settings: Settings | None = None) -> None:

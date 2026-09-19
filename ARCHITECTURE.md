@@ -96,37 +96,49 @@ document received", "did the call happen", "did validation pass".
 | PII to an AI provider | Org policy can force local-only; prompts receive named fields, never whole documents. |
 | Demo needs no credentials | Mock WhatsApp, Voice and AI providers selected by config (§31). |
 
-## 6b. Known defect in the PostgreSQL test path — cause not yet found
+## 6b. Known defect in the PostgreSQL test harness — three theories disproven
 
-`test_the_worker_claims_each_job_once` fails roughly one run in five **on
-PostgreSQL only**, and only when other test files run first. It passes in
-isolation and always passes on SQLite. `process_available_jobs` returns fewer
-jobs than were queued.
+Two worker tests fail roughly one run in five **on PostgreSQL only**, and only
+when other test files run first. They pass in isolation and always pass on
+SQLite. `process_available_jobs` returns fewer jobs than were queued.
 
-**What is established:**
+This is in the test harness, not the product. It cannot predate the PostgreSQL
+test path itself (commit `70d1798`), because before that there was no way to
+run the suite against PostgreSQL at all.
 
-* It reproduces on a clean checkout of the commit before the CA-operations
-  work, so no model or service added for this product causes it.
-* It cannot predate the PostgreSQL test harness itself (commit `70d1798`),
-  because before that there was no way to run the suite against PostgreSQL.
-  So it is most likely something in that harness — the per-test
-  `dispose_engine()`, or fixture teardown interleaving under pytest-asyncio's
-  per-test event loops.
-* In one captured failure the worker raised
-  `StorageError: The stored document is no longer available` while the
-  document's key was demonstrably present in the test's `InMemoryObjectStore`,
-  and `get_object_store() is object_store` was True from the test body.
+**The strongest evidence, and the best lead:**
 
-**What was tried and did not work:** leaving the object store installed at
-teardown instead of resetting it to `None`, on the theory that a real
-`LocalObjectStore` was being built in the gap. The flake survived unchanged
-over eight runs, so that explanation is wrong and the change was reverted
-rather than kept on a disproven rationale.
+In a captured failure, only **two** `extraction_jobs` rows existed where three
+had been submitted, *and* one of those two failed with
+`storage_error: The stored document is no longer available` — meaning its
+bytes were absent from the in-memory store.
 
-**Status:** root cause unknown. It will make the PostgreSQL CI job
-intermittently red, and that job should not be treated as a gate until this is
-fixed. It does not affect SQLite runs, and no production code path is
-implicated by any evidence gathered so far.
+A vanished row and vanished bytes together are explained by one thing: the
+*next* test's fixtures running while the current test is still working.
+`_clean_database` deletes every row; `_reset_singletons` installs a fresh
+empty `InMemoryObjectStore`. Both would produce exactly this.
+
+That points at an un-awaited coroutine or a stray background task somewhere in
+the test path, letting pytest advance while work is still in flight. **That is
+where the next person should look**, rather than at the pieces below.
+
+**Disproven, each by experiment:**
+
+1. *A real `LocalObjectStore` is built in the gap when the singleton is None.*
+   Instrumented `get_object_store()` to log every real construction and
+   reproduced the failure: **no real store was ever built.**
+2. *Resetting the store to None at teardown opens the window.* Left the store
+   installed instead; the flake survived eight runs unchanged.
+3. *Per-test `dispose_engine()` in teardown races with in-flight work.* Moved
+   disposal to setup, where nothing can be in flight by construction; still
+   failed 2 of 10. (Removing disposal entirely is not an option — the
+   "attached to a different loop" error returns immediately.)
+
+All three changes were reverted rather than kept on a disproven rationale.
+
+**Status:** unfixed. The PostgreSQL CI job must not gate merges until it is.
+SQLite runs are unaffected and green. No production code path is implicated by
+any evidence gathered.
 
 ## 7. Plan against the brief's day numbering
 
@@ -139,8 +151,8 @@ implicated by any evidence gathered so far.
 | 5 | Exception engine | **done** |
 | 6 | WhatsApp abstraction + mock provider + inbound webhook | **done** |
 | 7 | Client communication agent + tools | **done** |
-| 8 | Follow-up engine (`agent_jobs`) | |
-| 9 | Voice abstraction + mock workflow | |
+| 8 | Follow-up engine (`agent_jobs`) | **done** |
+| 9 | Voice abstraction + mock workflow | **done** |
 | 10 | CA command centre | |
 | 11 | End-to-end tests + demo seed | |
 | 12 | Hardening | |
