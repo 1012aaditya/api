@@ -28,20 +28,30 @@ const BLANK = {
   gstin: "",
 };
 
+/** A firm with five hundred clients must not silently see two hundred. */
+const PAGE = 100;
+
 export default function ClientsPage() {
   const [clients, setClients] = useState<PracticeClient[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
+  const [more, setMore] = useState(false);
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState(BLANK);
 
-  const load = useCallback(async (term: string) => {
+  const load = useCallback(async (term: string, offset = 0) => {
     setError(null);
     try {
       const query = term.trim() ? `&search=${encodeURIComponent(term.trim())}` : "";
-      setClients(await apiGet<PracticeClient[]>(`/v1/clients?limit=200${query}`));
+      const page = await apiGet<PracticeClient[]>(
+        `/v1/clients?limit=${PAGE}&offset=${offset}${query}`,
+      );
+      setClients((current) => (offset === 0 ? page : [...current, ...page]));
+      // A full page means there may be another. One extra request at the end
+      // beats a count query on every keystroke.
+      setMore(page.length === PAGE);
     } catch (caught) {
       if (caught instanceof ApiRequestError) setError(caught);
       else throw caught;
@@ -232,6 +242,13 @@ export default function ClientsPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {more && (
+          <div className="border-t border-line px-5 py-4 text-center">
+            <Button onClick={() => void load(search, clients.length)}>
+              Load more
+            </Button>
           </div>
         )}
       </Card>

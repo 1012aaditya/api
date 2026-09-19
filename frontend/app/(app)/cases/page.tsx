@@ -26,18 +26,26 @@ const FILTERS = [
   { value: "completed", label: "Completed" },
 ];
 
+/** Five hundred clients is five hundred cases a month. Page, do not truncate. */
+const PAGE = 100;
+
 export default function CasesPage() {
   const [cases, setCases] = useState<ComplianceCase[]>([]);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
+  const [more, setMore] = useState(false);
 
-  const load = useCallback(async (status: string) => {
-    setLoading(true);
+  const load = useCallback(async (status: string, offset = 0) => {
+    if (offset === 0) setLoading(true);
     setError(null);
     try {
       const query = status ? `&status=${status}` : "";
-      setCases(await apiGet<ComplianceCase[]>(`/v1/cases?limit=200${query}`));
+      const page = await apiGet<ComplianceCase[]>(
+        `/v1/cases?limit=${PAGE}&offset=${offset}${query}`,
+      );
+      setCases((current) => (offset === 0 ? page : [...current, ...page]));
+      setMore(page.length === PAGE);
     } catch (caught) {
       if (caught instanceof ApiRequestError) setError(caught);
       else throw caught;
@@ -137,6 +145,11 @@ export default function CasesPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {more && (
+          <div className="border-t border-line px-5 py-4 text-center">
+            <Button onClick={() => void load(filter, cases.length)}>Load more</Button>
           </div>
         )}
       </Card>
