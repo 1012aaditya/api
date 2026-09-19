@@ -228,6 +228,10 @@ class MessagingService:
         destination = client.whatsapp_phone or client.phone or ""
         result = await self.provider.send_message(to=destination, body=body)
 
+        # One clock for the row, the conversation and the event. Taking
+        # utcnow() here and again below would put a message in the timeline at
+        # a different moment from the event that records it.
+        moment = now or utcnow()
         message = Message(
             organization_id=client.organization_id,
             conversation_id=conversation.id,
@@ -241,10 +245,10 @@ class MessagingService:
             status=MessageStatus.SENT if result.ok else MessageStatus.FAILED,
             error=result.error,
             sent_by_agent=actor_type == ActorType.AGENT,
+            created_at=moment,
         )
         self._db.add(message)
 
-        moment = now or utcnow()
         if result.ok:
             conversation.last_message_at = moment
             conversation.status = ConversationStatus.AWAITING_CLIENT
@@ -326,6 +330,7 @@ class MessagingService:
             detected_intent=detected_intent,
             intent_details=intent_details or {},
             sent_by_agent=False,
+            created_at=moment,
         )
         self._db.add(message)
 
