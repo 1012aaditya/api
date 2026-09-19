@@ -104,8 +104,20 @@ async def tear_down(session, organization_id: str) -> None:
     await session.commit()
 
 
+class RefusedInProduction(RuntimeError):
+    pass
+
+
 async def seed(*, reset: bool = False) -> None:
     settings = get_settings()
+    if settings.is_production:
+        # Ten invented clients and a month of invented history, written into
+        # a real firm's database, would be indistinguishable from their own
+        # records a week later. --reset would then delete the real ones.
+        raise RefusedInProduction(
+            "This seeds invented clients and invented history. It will not run "
+            "against APP_ENV=production."
+        )
     set_provider(MockWhatsAppProvider())
     now = utcnow()
 
@@ -450,12 +462,16 @@ async def seed(*, reset: bool = False) -> None:
     )
 
 
-async def main() -> None:
+async def main() -> int:
     try:
         await seed(reset="--reset" in sys.argv[1:])
+    except RefusedInProduction as refusal:
+        print(f"Refusing: {refusal}", file=sys.stderr)
+        return 1
     finally:
         await dispose_engine()
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

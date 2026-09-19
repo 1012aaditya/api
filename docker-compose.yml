@@ -66,6 +66,16 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
+
+      # The WhatsApp adapter here is the mock: it records messages and sends
+      # nothing, so the whole document-chasing flow is demonstrable without a
+      # WhatsApp Business account and without anyone's phone buzzing. That is
+      # why APP_ENV above is development — the app refuses to start with the
+      # mock when APP_ENV is production, rather than report messages as sent
+      # that nobody received.
+      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-mock}
+      WHATSAPP_WEBHOOK_SECRET: ${WHATSAPP_WEBHOOK_SECRET:-}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-mock}
     volumes:
       - document-storage:/app/storage
     restart: unless-stopped
