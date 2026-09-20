@@ -233,6 +233,20 @@ Three joins fixed it:
    GSTIN, period and totals checks run, and a document nothing could read
    raises an exception rather than sitting in limbo.
 
+### Staff logins
+
+A firm was one account, which left a practice of five people choosing between
+sharing a password and having one person do everything. Now: three roles
+(owner, administrator, staff), invitations that are one-time links rather
+than emails (there is no mail server, and pretending otherwise would mean
+a feature that only works in a deployment nobody has), and role checks
+enforced in the API rather than by hiding buttons.
+
+The two properties worth keeping true: a firm cannot lock itself out (the
+last active owner cannot be demoted or switched off, and nobody can change
+their own role), and switching a colleague off takes effect on their next
+request rather than when their token happens to expire.
+
 ### Not done, and worth saying plainly
 
 * No AI provider key exists in this environment, so extraction has only ever

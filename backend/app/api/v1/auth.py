@@ -12,11 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import UserContext, get_current_user, get_request_id
 from app.core.config import Settings, get_settings
-from app.core.errors import ConflictError, InvalidAPIKeyError
+from app.core.errors import ConflictError, InvalidAPIKeyError, InvalidRequestError
 from app.core.logging import get_logger
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db
-from app.models import Organization, User
+from app.models import ActorType, Organization, Role, User
+from app.repositories.invitations import InvitationRepository
+from app.repositories.operations import AgentEventRepository
 from app.repositories.organizations import OrganizationRepository
 from app.repositories.users import UserRepository
 from app.schemas.auth import (
@@ -26,7 +28,8 @@ from app.schemas.auth import (
     TokenResponse,
     UserProfile,
 )
-from app.schemas.common import SuccessResponse
+from app.schemas.common import ErrorResponse, SuccessResponse
+from app.schemas.team import AcceptInviteIn
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = get_logger("docuparse.auth")
@@ -74,6 +77,77 @@ async def signup(
         full_name=payload.full_name,
     )
     logger.info("auth.signup", organization_id=organization.id, user_id=user.id)
+
+    token = create_access_token(user_id=user.id, organization_id=organization.id)
+    return SuccessResponse(
+        request_id=request_id,
+        data=TokenResponse(
+            access_token=token,
+            expires_in_seconds=settings.jwt_expire_minutes * 60,
+            user=_profile(user, organization),
+        ),
+    )
+
+
+@router.post(
+    "/accept-invite",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SuccessResponse[TokenResponse],
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Join a firm you were invited to",
+)
+async def accept_invite(
+    payload: AcceptInviteIn,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[TokenResponse]:
+    """Turn a one-time link into a login.
+
+    Deliberately anonymous: the token is the claim. Every way it can fail —
+    unknown, used, withdrawn, expired — gives the same answer, because a
+    stranger probing links should not learn which firm a token nearly
+    belonged to.
+    """
+    invitations = InvitationRepository(db)
+    invitation = await invitations.find_by_token(payload.token)
+    if invitation is None or not invitation.is_open():
+        raise InvalidRequestError(
+            "That invitation link is not usable. It may have been used "
+            "already, withdrawn, or expired — ask for a new one."
+        )
+
+    users = UserRepository(db)
+    if await users.get_by_email(invitation.email) is not None:
+        raise ConflictError("An account with that email address already exists.")
+
+    organization = await OrganizationRepository(db).get(invitation.organization_id)
+    if organization is None:
+        raise InvalidRequestError("That invitation link is not usable.")
+
+    user = await users.create(
+        organization_id=organization.id,
+        email=invitation.email,
+        password_hash=hash_password(payload.password),
+        full_name=payload.full_name,
+        role=invitation.role,
+    )
+    await invitations.accept(invitation, user_id=user.id)
+    # Accepting hands back a session token, so they are signed in from here.
+    # Without this the firm's people list would say "Never" about someone who
+    # is looking at the dashboard right now.
+    await users.touch_login(user)
+    await AgentEventRepository(db).record(
+        organization_id=organization.id,
+        actor_type=ActorType.USER,
+        actor_id=user.id,
+        action="team.joined",
+        summary=f"{user.email} joined as {Role.LABELS.get(user.role, user.role)}",
+        entity_type="user",
+        entity_id=user.id,
+    )
+    await db.commit()
+    logger.info("auth.invite_accepted", organization_id=organization.id, user_id=user.id)
 
     token = create_access_token(user_id=user.id, organization_id=organization.id)
     return SuccessResponse(

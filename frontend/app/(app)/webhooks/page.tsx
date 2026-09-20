@@ -17,6 +17,7 @@ import {
   StatusBadge,
 } from "@/components/ui";
 import { ApiRequestError, apiDelete, apiGet, apiSend } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { dateTime, relativeTime } from "@/lib/format";
 import type {
   CreatedWebhook,
@@ -56,6 +57,7 @@ const DELIVERY_LABEL = {
 } as const;
 
 export default function WebhooksPage() {
+  const { user } = useAuth();
   const [webhooks, setWebhooks] = useState<WebhookSummary[]>([]);
   const [deliveries, setDeliveries] = useState<DeliverySummary[]>([]);
   const [created, setCreated] = useState<CreatedWebhook | null>(null);
@@ -68,6 +70,10 @@ export default function WebhooksPage() {
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  // Reading the endpoints is everyone's; changing them is refused by the
+  // API for a staff login, so the controls are not offered either.
+  const mayChange = user?.role === "owner" || user?.role === "admin";
 
   const load = useCallback(async () => {
     try {
@@ -204,6 +210,7 @@ export default function WebhooksPage() {
         </Card>
       )}
 
+      {mayChange && (
       <Card className="mb-6">
         <CardHeader title="Add an endpoint" />
         <div className="space-y-4 p-5">
@@ -263,6 +270,7 @@ export default function WebhooksPage() {
           </Button>
         </div>
       </Card>
+      )}
 
       <Card className="mb-6">
         <CardHeader title="Endpoints" />
@@ -308,15 +316,19 @@ export default function WebhooksPage() {
                       status={hook.is_active ? "passed" : "not_checked"}
                       label={hook.is_active ? "Active" : "Disabled"}
                     />
-                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => void rotate(hook.id)}>
-                      Rotate secret
-                    </Button>
-                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => void toggle(hook)}>
-                      {hook.is_active ? "Disable" : "Enable"}
-                    </Button>
-                    <Button size="sm" variant="danger" disabled={busy} onClick={() => void remove(hook.id)}>
-                      Delete
-                    </Button>
+                    {mayChange && (
+                      <>
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void rotate(hook.id)}>
+                          Rotate secret
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void toggle(hook)}>
+                          {hook.is_active ? "Disable" : "Enable"}
+                        </Button>
+                        <Button size="sm" variant="danger" disabled={busy} onClick={() => void remove(hook.id)}>
+                          Delete
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
               </li>

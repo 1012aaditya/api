@@ -52,7 +52,7 @@ from app.models.requirement import (
 )
 from app.models.tally import Ledger, LedgerAlias, TallySettings
 from app.models.usage_event import UsageEvent
-from app.models.user import User
+from app.models.user import Invitation, Role, User
 from app.models.validation_result import ValidationResult
 from app.models.webhook import DeliveryStatus, Webhook, WebhookDelivery, WebhookEvent
 
@@ -107,6 +107,8 @@ __all__ = [
     "Organization",
     "TallySettings",
     "UsageEvent",
+    "Invitation",
+    "Role",
     "User",
     "ValidationResult",
     "Webhook",

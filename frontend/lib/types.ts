@@ -518,3 +518,33 @@ export interface AgentRunResult {
   sent: number;
   skipped: string[];
 }
+
+/* --- the people inside a firm ---------------------------------------- */
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: string;
+  role_label: string;
+  is_active: boolean;
+  last_login_at: string | null;
+  created_at: string;
+  is_you: boolean;
+}
+
+export interface Invitation {
+  id: string;
+  email: string;
+  role: string;
+  role_label: string;
+  invited_by?: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface InvitationCreated extends Invitation {
+  token: string;
+  accept_url: string;
+  note: string;
+}

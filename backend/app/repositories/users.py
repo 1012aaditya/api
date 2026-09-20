@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import utcnow
@@ -26,6 +26,28 @@ class UserRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_for_organization(self, organization_id: str) -> list[User]:
+        result = await self.session.execute(
+            select(User)
+            .where(User.organization_id == organization_id)
+            .order_by(User.created_at)
+        )
+        return list(result.scalars().all())
+
+    async def count_active_owners(self, organization_id: str) -> int:
+        from app.models import Role
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.organization_id == organization_id,
+                User.role == Role.OWNER,
+                User.is_active.is_(True),
+            )
+        )
+        return int(result.scalar_one())
 
     async def create(
         self,

@@ -402,6 +402,11 @@ Consistent envelope, stable codes, no stack traces and no provider details:
 | `POST` | `/v1/webhooks/{id}/rotate` | session | New signing secret, same endpoint. |
 | `POST` | `/v1/webhooks/{id}/enable` · `/disable` | session | Stop or resume delivery. |
 | `GET` | `/v1/webhooks/deliveries` | session | Delivery attempts, with status and retries. |
+| `GET` | `/v1/team` | session | **Everyone with a login to this firm**, and what each may do. |
+| `POST` · `GET` | `/v1/team/invites` | owner/admin | Invite a colleague; list invitations nobody has used. |
+| `DELETE` | `/v1/team/invites/{id}` | owner/admin | Withdraw one. |
+| `PATCH` | `/v1/team/{user_id}` | owner/admin | Change a colleague's role, or switch their login off. |
+| `POST` | `/v1/auth/accept-invite` | — | Turn a one-time invitation link into a login. |
 | `GET` | `/v1/command-centre` | session | **What needs attention today**, counted from the rows themselves. |
 | `POST` · `GET` | `/v1/clients` | session | Add a client; list them with where each one stands. |
 | `GET` · `PATCH` | `/v1/clients/{id}` | session | One client; change their details or switch automation off. |
@@ -561,6 +566,43 @@ python scripts/seed_demo.py --reset   # tear it down and build it again
 The clients are invented, the GSTINs are checksum-valid and identify no
 registered taxpayer, and no real document is in this repository. The demo uses
 no external credentials and sends no message anywhere.
+
+### More than one login
+
+A CA practice is three to twenty people sharing one client list, so a firm is
+not one account:
+
+| Role | May do |
+|---|---|
+| **Owner** | Everything. The person who signed the firm up; there is always at least one. |
+| **Administrator** | Everything an owner may, including inviting people and changing the agent's limits. |
+| **Staff** | The daily work — clients, cases, documents, exceptions, tasks, conversations. |
+
+Staff are deliberately not read-only: chasing documents *is* the job. What
+their login cannot reach is the firm's controls — inviting colleagues, the
+agent's limits, and API keys. A phished junior account should not be able to
+hand over the firm's automation or its integration credentials, and that is
+enforced by the API refusing the request, not by the dashboard hiding a
+button.
+
+```bash
+curl -X POST http://localhost:8000/v1/team/invites \
+  -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' \
+  -d '{"email":"ravi@sharma-associates.example","role":"staff"}'
+# → { "accept_url": "https://…/accept-invite?token=…", "expires_at": … }
+```
+
+**There is no mail server here, so nothing is emailed.** The invitation comes
+back as a link, shown once, which the firm sends however they already talk —
+WhatsApp, usually. That makes the link a credential, so it is treated like
+one: stored only as a SHA-256, usable once, withdrawable, and dead after a
+week.
+
+Switching a colleague off takes effect on their **next request**, not when
+their token expires — the junior who left on Friday cannot read the client
+list on Monday. And a firm cannot lock itself out: the last active owner
+cannot be demoted or switched off, nobody can switch off their own login, and
+nobody can change their own role.
 
 ### Connecting a real WhatsApp number
 

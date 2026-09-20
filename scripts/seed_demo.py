@@ -41,6 +41,7 @@ from app.models import (  # noqa: E402
     ExceptionType,
     Priority,
     RequirementStatus,
+    Role,
     Severity,
 )
 from app.providers.messaging.base import InboundMessage  # noqa: E402
@@ -135,12 +136,27 @@ async def seed(*, reset: bool = False) -> None:
             print(f"Removed the previous demo firm ({existing.id}).")
 
         organization = await organizations.create(name=FIRM)
-        await UserRepository(session).create(
+        users = UserRepository(session)
+        await users.create(
             organization_id=organization.id,
             email=EMAIL,
             password_hash=hash_password(PASSWORD),
             full_name="Anita Sharma",
         )
+        # A firm is not one person. Two colleagues, so the team page shows
+        # what a real practice looks like — and so the roles can be seen
+        # doing something.
+        for email, name, role in (
+            (f"partner@{EMAIL.split('@')[1]}", "Vikram Sharma", Role.ADMIN),
+            (f"ravi@{EMAIL.split('@')[1]}", "Ravi Kumar", Role.STAFF),
+        ):
+            await users.create(
+                organization_id=organization.id,
+                email=email,
+                password_hash=hash_password(PASSWORD),
+                full_name=name,
+                role=role,
+            )
         # Voice stays off, as it is for every new firm (§17). A demo that
         # ships with calls enabled implies a configured voice provider, and
         # there is none — the CA turns it on themselves once there is.
@@ -457,7 +473,9 @@ async def seed(*, reset: bool = False) -> None:
 
     print(
         f"Seeded {FIRM}: {len(CLIENTS)} clients, one GST case each for {PERIOD}.\n"
-        f"Sign in as {EMAIL} / {PASSWORD}\n"
+        f"Sign in as {EMAIL} / {PASSWORD} (owner).\n"
+        f"Or as ravi@{EMAIL.split('@')[1]} / {PASSWORD} to see what a staff "
+        "login may and may not do.\n"
         "No external credentials were used and no message was sent anywhere."
     )
 

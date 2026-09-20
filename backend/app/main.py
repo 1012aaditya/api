@@ -34,6 +34,7 @@ def _build_v1_router() -> APIRouter:
         jobs,
         operations,
         tally,
+        team,
         usage,
         webhooks,
     )
@@ -50,6 +51,7 @@ def _build_v1_router() -> APIRouter:
     router.include_router(tally.router)
     router.include_router(inbound.router)
     router.include_router(operations.router)
+    router.include_router(team.router)
     router.include_router(webhooks.router)
     return router
 

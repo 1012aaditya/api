@@ -11,7 +11,12 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthContext, authenticate_session, get_request_id
+from app.api.deps import (
+    AuthContext,
+    authenticate_session,
+    get_request_id,
+    require_privileged,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import InvalidRequestError, NotFoundError
 from app.db.base import utcnow
@@ -722,7 +727,9 @@ async def get_policy(
 )
 async def update_policy(
     payload: AgentPolicyIn,
-    auth: AuthContext = Depends(authenticate_session),
+    # What the agent may do to a firm's clients is not a junior's setting to
+    # change — nor a phished junior account's.
+    auth: AuthContext = Depends(require_privileged),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[AgentPolicyOut]:

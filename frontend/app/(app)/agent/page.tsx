@@ -13,6 +13,7 @@ import {
   Spinner,
 } from "@/components/ui";
 import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { dateTime } from "@/lib/format";
 import type { AgentEvent, AgentPolicy } from "@/lib/types";
 
@@ -74,12 +75,18 @@ function Number_({
 }
 
 export default function AgentPage() {
+  const { user } = useAuth();
   const [policy, setPolicy] = useState<AgentPolicy | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // The API refuses a staff login's PUT outright. Showing them a live form
+  // and a Save button that can only fail would be a lie about what they can
+  // do, so the controls go read-only instead.
+  const mayChange = user?.role === "owner" || user?.role === "admin";
 
   const load = useCallback(async () => {
     setError(null);
@@ -132,9 +139,16 @@ export default function AgentPage() {
         title="Agent"
         description="What the agent may do on your behalf, and everything it has done."
         action={
-          <Button variant="primary" onClick={() => void save()} disabled={saving || !policy}>
-            {saving ? "Saving…" : "Save settings"}
-          </Button>
+          mayChange ? (
+            <Button variant="primary" onClick={() => void save()} disabled={saving || !policy}>
+              {saving ? "Saving…" : "Save settings"}
+            </Button>
+          ) : (
+            <p className="max-w-xs text-sm text-muted">
+              These are the limits you work under. An owner or an administrator
+              of the firm changes them.
+            </p>
+          )
         }
       />
 
@@ -153,7 +167,7 @@ export default function AgentPage() {
       )}
 
       {policy && (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <fieldset disabled={!mayChange} className="grid gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader
               title="What it may do"
@@ -305,7 +319,7 @@ export default function AgentPage() {
               </label>
             </div>
           </Card>
-        </div>
+        </fieldset>
       )}
 
       <Card className="mt-6">

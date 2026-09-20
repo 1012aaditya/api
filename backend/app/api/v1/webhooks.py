@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import UserContext, get_current_user, get_request_id
+from app.api.deps import UserContext, get_current_user, get_request_id, require_privileged_user
 from app.core.config import Settings, get_settings
 from app.core.errors import ConflictError, NotFoundError, ProviderUnavailableError
 from app.core.logging import get_logger
@@ -88,7 +88,7 @@ def _secret_for(webhook: Webhook, settings: Settings) -> str:
 )
 async def create_webhook(
     payload: CreateWebhookRequest,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
     request_id: str = Depends(get_request_id),
@@ -141,7 +141,7 @@ async def list_webhooks(
 )
 async def delete_webhook(
     webhook_id: str,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[dict]:
@@ -165,7 +165,7 @@ async def delete_webhook(
 )
 async def rotate_webhook_secret(
     webhook_id: str,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
     request_id: str = Depends(get_request_id),
@@ -195,7 +195,7 @@ async def rotate_webhook_secret(
 )
 async def enable_webhook(
     webhook_id: str,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
     request_id: str = Depends(get_request_id),
@@ -219,7 +219,7 @@ async def enable_webhook(
 )
 async def disable_webhook(
     webhook_id: str,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[WebhookSummary]:

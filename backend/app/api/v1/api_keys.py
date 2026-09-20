@@ -11,7 +11,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import UserContext, get_current_user, get_request_id
+from app.api.deps import UserContext, get_request_id, require_privileged_user
 from app.core.errors import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.core.security import generate_api_key
@@ -83,7 +83,7 @@ async def _issue(
 )
 async def create_api_key(
     payload: CreateAPIKeyRequest,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[CreatedAPIKey]:
@@ -103,7 +103,7 @@ async def create_api_key(
     summary="List this organization's API keys",
 )
 async def list_api_keys(
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[list[APIKeySummary]]:
@@ -118,7 +118,7 @@ async def list_api_keys(
 )
 async def revoke_api_key(
     key_id: str,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[APIKeySummary]:
@@ -142,7 +142,7 @@ async def revoke_api_key(
 )
 async def rotate_api_key(
     key_id: str,
-    context: UserContext = Depends(get_current_user),
+    context: UserContext = Depends(require_privileged_user),
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[CreatedAPIKey]:

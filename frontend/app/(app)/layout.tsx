@@ -11,7 +11,9 @@ import { useAuth } from "@/lib/auth";
 /* Two jobs share this dashboard: running a practice, and running the API
  * that serves it. Splitting the nav keeps the daily work at the top rather
  * than mixed in with the developer pages. */
-const NAV = [
+type NavItem = { href: string; label: string; privileged?: boolean };
+
+const NAV: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Practice",
     items: [
@@ -22,6 +24,7 @@ const NAV = [
       { href: "/tasks", label: "Tasks" },
       { href: "/conversations", label: "Conversations" },
       { href: "/agent", label: "Agent" },
+      { href: "/team", label: "Your firm" },
     ],
   },
   {
@@ -33,7 +36,7 @@ const NAV = [
       { href: "/tally", label: "Post to Tally" },
       { href: "/dashboard", label: "API usage" },
       { href: "/usage", label: "Usage" },
-      { href: "/api-keys", label: "API keys" },
+      { href: "/api-keys", label: "API keys", privileged: true },
       { href: "/webhooks", label: "Webhooks" },
       { href: "/docs", label: "Docs" },
       { href: "/settings", label: "Settings" },
@@ -46,6 +49,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const mayAdminister = user?.role === "owner" || user?.role === "admin";
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
@@ -86,13 +90,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="px-3 py-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:py-0">
-          {NAV.map((section) => (
+          {NAV.map((section) => {
+            // A link that can only answer 403 is not a link. The API refuses a
+            // staff login's key management outright, so it is left out rather
+            // than shown and then apologised for.
+            const items = section.items.filter((item) => !item.privileged || mayAdminister);
+            if (items.length === 0) return null;
+            return (
             <div key={section.heading} className="mb-4 last:mb-0">
               <p className="px-3 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
                 {section.heading}
               </p>
               <ul className="space-y-0.5">
-                {section.items.map((item) => {
+                {items.map((item) => {
                   const active =
                     pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
@@ -113,7 +123,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 })}
               </ul>
             </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className="mt-4 border-t border-line px-5 py-4 lg:mt-0">

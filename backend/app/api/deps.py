@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.context import set_organization_id
 from app.core.errors import (
     AuthenticationRequiredError,
+    ForbiddenError,
     InvalidAPIKeyError,
     QuotaExceededError,
     RateLimitExceededError,
@@ -145,6 +146,24 @@ async def authenticate_session(
     )
 
 
+async def require_privileged(
+    auth: AuthContext = Depends(authenticate_session),
+) -> AuthContext:
+    """Only an owner or an administrator may pass.
+
+    Guarding what a phished junior account must not be able to do: invite
+    themselves a colleague, turn the agent's limits off, or mint an API key
+    that outlives their login.
+    """
+    from app.models import Role
+
+    if auth.user is None or auth.user.role not in Role.PRIVILEGED:
+        raise ForbiddenError(
+            "Only an owner or an administrator of this firm may do that."
+        )
+    return auth
+
+
 async def authenticate_any(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -230,3 +249,17 @@ async def get_current_user(
     set_organization_id(organization.id)
     request.state.organization_id = organization.id
     return UserContext(user=user, organization=organization)
+
+
+async def require_privileged_user(
+    context: UserContext = Depends(get_current_user),
+) -> UserContext:
+    """The same gate as ``require_privileged``, for the routers that work
+    with a ``UserContext`` rather than an ``AuthContext``."""
+    from app.models import Role
+
+    if context.user.role not in Role.PRIVILEGED:
+        raise ForbiddenError(
+            "Only an owner or an administrator of this firm may do that."
+        )
+    return context
