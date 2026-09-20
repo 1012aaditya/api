@@ -23,7 +23,14 @@ def get_engine() -> AsyncEngine:
         settings = get_settings()
         kwargs: dict[str, object] = {"echo": settings.database_echo, "future": True}
         if not settings.database_url.startswith("sqlite"):
-            kwargs |= {"pool_size": 10, "max_overflow": 20, "pool_pre_ping": True}
+            kwargs |= {
+                "pool_size": settings.db_pool_size,
+                "max_overflow": settings.db_max_overflow,
+                # A connection killed by a restart or an idle timeout is
+                # otherwise handed to a request, which then fails for reasons
+                # that look nothing like the cause.
+                "pool_pre_ping": True,
+            }
         _engine = create_async_engine(settings.database_url, **kwargs)
     return _engine
 

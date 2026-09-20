@@ -606,6 +606,24 @@ nobody can change their own role.
 
 ### Connecting a real WhatsApp number
 
+Four things have to exist at Meta before any variable below means anything,
+and two of them are waiting rather than work:
+
+1. A **Meta Business account** with the business **verified** — they ask for
+   incorporation or GST documents and reject blurry scans. Days, sometimes a
+   couple of weeks.
+2. A **WhatsApp Business Account**, and a phone number that has **never** been
+   used on consumer WhatsApp. A number already on the normal app cannot be
+   moved without deleting that account first.
+3. A **permanent system-user access token** — not the temporary one the
+   dashboard offers you first, which expires in 24 hours and will look like a
+   bug three days later.
+4. An **approved message template**, submitted separately and reviewed
+   separately. See the 24-hour window below: without one, the first chase to a
+   client who has not written to you today simply fails.
+
+Budget a week or two of calendar time, most of it waiting on review.
+
 ```bash
 WHATSAPP_PROVIDER=whatsapp_cloud
 WHATSAPP_PHONE_NUMBER_ID=...      # the number's id, not the number
@@ -1296,6 +1314,27 @@ Every setting, with its default, is documented in
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are present but unused — the
 storage and auth layers are self-hosted. They exist so a Supabase-backed
 deployment can be wired up without changing the env contract.
+
+### Running it for real
+
+[**DEPLOYMENT.md**](DEPLOYMENT.md) is the production runbook: the stack in
+[`deploy/`](deploy), what to provision, the connection-pool arithmetic that
+decides whether filing day works, a monthly cost breakdown, and the checklist
+to clear before a paying customer is pointed at it.
+
+`APP_ENV=production` is not a label. It refuses to start on four things that
+look like nothing in development:
+
+| | Why it refuses |
+|---|---|
+| No `REDIS_URL` | The in-memory rate limiter counts per process, so N workers would grant every firm N times its limit |
+| Unreachable Redis | Same, but at the worst possible moment — silently |
+| `WHATSAPP_PROVIDER=mock` / `VOICE_PROVIDER=mock` | Sends nothing and reports success |
+| Wildcard CORS | Any page on the internet could drive a signed-in CA's session |
+
+Each has an explicit way to say "yes, I mean it" where one is legitimate —
+`ALLOW_IN_MEMORY_RATE_LIMIT` for a genuine single-worker deployment — so none
+of them can be satisfied by accident.
 
 ---
 

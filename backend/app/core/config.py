@@ -25,16 +25,35 @@ class Settings(BaseSettings):
 
     # --- Application ---
     app_env: Literal["development", "staging", "test", "production"] = "development"
-    app_url: str = "http://localhost:8000"
+    #: Where the **dashboard** is served, not the API. It is the base for
+    #: invitation links and the default CORS origin, both of which a browser
+    #: has to reach. In production this is your app domain.
+    app_url: str = "http://localhost:3000"
+    #: Browser origins allowed to call this API, comma separated. Defaults to
+    #: ``app_url`` alone. Set it when the dashboard is served from more than
+    #: one hostname. Never "*" in production — see ``cors_origins``.
+    cors_allow_origins: str | None = None
     log_level: str = "INFO"
     debug: bool = False
 
     # --- Database ---
     database_url: str = "postgresql+asyncpg://docuparse:docuparse@localhost:5432/docuparse"
     database_echo: bool = False
+    #: Connections held open per process. Every API worker and every job
+    #: worker keeps its own pool, so the ceiling Postgres sees is
+    #: (api_workers + job_workers) x (pool_size + max_overflow). Exceed
+    #: ``max_connections`` and requests fail with "too many clients" under
+    #: exactly the load you sized the workers for. DEPLOYMENT.md does the
+    #: arithmetic.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
 
     # --- Redis ---
+    #: Required in production: rate limiting is per-process without it, so
+    #: N API workers would grant every organization N times its limit. Set
+    #: ``allow_in_memory_rate_limit`` to run without it anyway.
     redis_url: str | None = None
+    allow_in_memory_rate_limit: bool = False
 
     # --- Storage ---
     storage_backend: Literal["local", "s3"] = "local"
@@ -159,6 +178,24 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Which browser origins may call this API.
+
+        Development allows anything, because the dashboard moves between
+        ports and a CORS failure looks like a network error with no status.
+        Production allows exactly what is listed — a wildcard there would let
+        any page on the internet drive a signed-in CA's session.
+        """
+        if self.cors_allow_origins:
+            listed = [o.strip().rstrip("/") for o in self.cors_allow_origins.split(",")]
+            origins = [origin for origin in listed if origin]
+            if origins:
+                return origins
+        if not self.is_production:
+            return ["*"]
+        return [self.app_url.rstrip("/")]
 
     @property
     def enabled_tiers(self) -> tuple[str, ...]:

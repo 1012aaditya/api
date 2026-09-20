@@ -1,0 +1,269 @@
+# The production stack.
+#
+#   cd deploy
+#   cp ../.env.production.example .env      # then fill it in
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# What is different from the development compose, and why:
+#
+#   * Caddy terminates TLS and is the only thing with a published port. The
+#     API and the dashboard are not reachable from outside the network except
+#     through it, so there is no way to hit the API over plain HTTP by
+#     accident.
+#   * Redis is not optional. Rate limiting counts per process, so four API
+#     workers without it would grant every firm four times its limit. The API
+#     refuses to boot in production without REDIS_URL.
+#   * The API runs several uvicorn workers, and the job worker is scaled
+#     separately. Jobs are claimed with FOR UPDATE SKIP LOCKED, so workers
+#     never collide.
+#   * Postgres is tuned for the connection ceiling the workers can reach, and
+#     is backed up on a schedule. See DEPLOYMENT.md for the arithmetic.
+#   * Ollama reads documents on this machine. No client invoice leaves it.
+#
+# Sizing, worker counts and what all of this costs: DEPLOYMENT.md.
+
+name: docuparse
+
+x-backend-env: &backend-env
+  APP_ENV: production
+  APP_URL: "${APP_URL:?set APP_URL to the dashboard address, e.g. https://app.example.com}"
+  CORS_ALLOW_ORIGINS: "${CORS_ALLOW_ORIGINS:-}"
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+
+  DATABASE_URL: postgresql+asyncpg://docuparse:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/docuparse
+  DB_POOL_SIZE: "${DB_POOL_SIZE:-10}"
+  DB_MAX_OVERFLOW: "${DB_MAX_OVERFLOW:-10}"
+
+  REDIS_URL: redis://redis:6379/0
+
+  STORAGE_BACKEND: "${STORAGE_BACKEND:-local}"
+  STORAGE_LOCAL_PATH: /app/storage
+  STORAGE_BUCKET: "${STORAGE_BUCKET:-docuparse-documents}"
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_REGION: ${S3_REGION:-ap-south-1}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+
+  JWT_SECRET: "${JWT_SECRET:?generate one with: openssl rand -hex 32}"
+  WEBHOOK_SECRET: "${WEBHOOK_SECRET:?generate one with: openssl rand -hex 32}"
+
+  # Reading documents. Ollama runs beside this stack, so invoices stay on
+  # this machine. AI_API_KEY is required by the OpenAI-compatible client and
+  # is not checked by Ollama.
+  AI_PROVIDER: openai_compatible
+  AI_BASE_URL: "${AI_BASE_URL:-http://ollama:11434/v1}"
+  AI_API_KEY: "${AI_API_KEY:-local}"
+  AI_MODEL: "${AI_MODEL:?set AI_MODEL, e.g. qwen2.5vl:7b}"
+  EXTRACTION_TIERS: "${EXTRACTION_TIERS:-qr,text_layer,model}"
+
+  # Messaging. The mock is refused under APP_ENV=production, so these have to
+  # be real before the stack will start.
+  WHATSAPP_PROVIDER: "${WHATSAPP_PROVIDER:-whatsapp_cloud}"
+  WHATSAPP_PHONE_NUMBER_ID: "${WHATSAPP_PHONE_NUMBER_ID:-}"
+  WHATSAPP_ACCESS_TOKEN: "${WHATSAPP_ACCESS_TOKEN:-}"
+  WHATSAPP_VERIFY_TOKEN: "${WHATSAPP_VERIFY_TOKEN:-}"
+  WHATSAPP_WEBHOOK_SECRET: "${WHATSAPP_WEBHOOK_SECRET:-}"
+  WHATSAPP_TEMPLATE_NAME: "${WHATSAPP_TEMPLATE_NAME:-}"
+  WHATSAPP_TEMPLATE_LANGUAGE: "${WHATSAPP_TEMPLATE_LANGUAGE:-en}"
+
+  VOICE_PROVIDER: "${VOICE_PROVIDER:-exotel}"
+  EXOTEL_SID: "${EXOTEL_SID:-}"
+  EXOTEL_API_KEY: "${EXOTEL_API_KEY:-}"
+  EXOTEL_API_TOKEN: "${EXOTEL_API_TOKEN:-}"
+  EXOTEL_CALLER_ID: "${EXOTEL_CALLER_ID:-}"
+  EXOTEL_FLOW_ID: "${EXOTEL_FLOW_ID:-}"
+  EXOTEL_REGION: "${EXOTEL_REGION:-in}"
+
+  DOCUMENT_RETENTION_DAYS: "${DOCUMENT_RETENTION_DAYS:-7}"
+
+x-logging: &logging
+  # Unbounded container logs are the most common way a small box runs out of
+  # disk at 3am.
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      API_DOMAIN: "${API_DOMAIN:?set API_DOMAIN, e.g. api.example.com}"
+      APP_DOMAIN: "${APP_DOMAIN:?set APP_DOMAIN, e.g. app.example.com}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: docuparse
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+      POSTGRES_DB: docuparse
+    # max_connections has to clear the ceiling every pool can reach at once.
+    # DEPLOYMENT.md shows the sum; change both together or neither.
+    command:
+      - postgres
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-1GB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-3GB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuparse -d docuparse"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *logging
+    # Rate-limit counters are disposable: losing them on a restart costs one
+    # minute of limits, so there is no reason to pay for persistence.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *backend-env
+    # One uvicorn process per core, give or take. Async code spends most of
+    # its time waiting, so this is about CPU for JSON and TLS-free HTTP
+    # parsing, not about concurrency — each worker handles hundreds of open
+    # connections by itself.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --workers
+      - "${API_WORKERS:-4}"
+      # Trusting forwarded headers from anything is safe here precisely
+      # because nothing but Caddy can reach this container: the API
+      # publishes no port, so there is no path from the internet that
+      # bypasses the proxy. Publish a port and this becomes a way to spoof
+      # a client IP.
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    volumes:
+      - document-storage:/app/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 40s
+      retries: 5
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      <<: *backend-env
+      # The API container owns migrations; these wait rather than racing to
+      # stamp the same revision.
+      RUN_MIGRATIONS: "false"
+    command: ["python", "/app/scripts/run_worker.py"]
+    volumes:
+      - document-storage:/app/storage
+    # docker compose -f docker-compose.prod.yml up -d --scale worker=3
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      args:
+        # Inlined into the browser bundle at build time, so it must be the
+        # public API address — not http://api:8000, which resolves only
+        # inside this network. Changing it requires a rebuild, not a restart.
+        NEXT_PUBLIC_API_URL: https://${API_DOMAIN:?set API_DOMAIN}
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ollama-models:/root/.ollama
+    # Drop this block on a CPU-only box; it will be slow but it will work.
+    # With a GPU, install the NVIDIA container toolkit first.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+      BACKUP_KEEP_DAYS: "${BACKUP_KEEP_DAYS:-14}"
+    volumes:
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
+      - postgres-backups:/backups
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup.sh"]
+
+volumes:
+  postgres-data:
+  postgres-backups:
+  document-storage:
+  caddy-data:
+  caddy-config:
+  ollama-models:

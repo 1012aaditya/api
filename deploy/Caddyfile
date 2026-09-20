@@ -1,0 +1,74 @@
+# TLS, and the only door into the stack.
+#
+# Caddy gets certificates from Let's Encrypt automatically on first start.
+# Both names must already point at this machine's IP or the challenge fails
+# and you get a certificate error instead of a site.
+
+{
+	# Where Let's Encrypt sends expiry warnings. Worth setting.
+	email {$ACME_EMAIL:admin@localhost}
+	servers {
+		# Caddy is the only thing facing the internet, so it is the only
+		# thing entitled to trust these headers.
+		trusted_proxies static private_ranges
+	}
+}
+
+# --- the API ---------------------------------------------------------------
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Bulk upload accepts up to 200 files in one multipart body, and the
+	# whole body is held in memory while it is read. This bounds it well
+	# below what the container has.
+	request_body {
+		max_size 250MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# WhatsApp retries a webhook that does not answer quickly, and a retried
+	# delivery is a duplicate message to a client. Reading a document can
+	# take longer than Caddy's default.
+	reverse_proxy api:8000 {
+		transport http {
+			read_timeout 180s
+			write_timeout 180s
+		}
+	}
+
+	log {
+		output file /data/access-api.log {
+			roll_size 50MB
+			roll_keep 10
+		}
+	}
+}
+
+# --- the dashboard ---------------------------------------------------------
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy web:3000
+
+	log {
+		output file /data/access-web.log {
+			roll_size 50MB
+			roll_keep 10
+		}
+	}
+}

@@ -113,11 +113,27 @@ def get_rate_limiter() -> RateLimiter:
     return _limiter
 
 
+class RateLimiterMisconfigured(RuntimeError):
+    """Raised at boot rather than serving traffic with a limit that is not one."""
+
+
 def build_rate_limiter() -> RateLimiter:
     from app.core.config import get_settings
 
     settings = get_settings()
     if not settings.redis_url:
+        if settings.is_production and not settings.allow_in_memory_rate_limit:
+            # The in-memory counter lives inside one process. Run four API
+            # workers and every organization silently gets four times its
+            # limit, which is not a rate limit — it is a number in a log
+            # line. Refusing to boot is the honest outcome (§42).
+            raise RateLimiterMisconfigured(
+                "APP_ENV=production needs REDIS_URL: the in-memory rate "
+                "limiter counts per process, so N API workers would grant "
+                "every organization N times its limit. Set REDIS_URL, or "
+                "ALLOW_IN_MEMORY_RATE_LIMIT=true if you really do run a "
+                "single worker."
+            )
         if settings.is_production:
             logger.warning("ratelimit.in_memory_in_production")
         return InMemoryRateLimiter()
@@ -126,6 +142,12 @@ def build_rate_limiter() -> RateLimiter:
 
         return RedisRateLimiter(redis.from_url(settings.redis_url, decode_responses=True))
     except Exception as exc:  # noqa: BLE001
+        if settings.is_production and not settings.allow_in_memory_rate_limit:
+            raise RateLimiterMisconfigured(
+                f"REDIS_URL is set but the client would not start ({type(exc).__name__}). "
+                "Falling back to the per-process counter in production would "
+                "quietly multiply every limit by the worker count."
+            ) from exc
         logger.warning("ratelimit.redis_init_failed", error=type(exc).__name__)
         return InMemoryRateLimiter()
 

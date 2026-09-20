@@ -12,6 +12,7 @@ from app.core.config import Settings, get_settings
 from app.core.exception_handlers import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
+from app.core.rate_limit import get_rate_limiter
 from app.db.session import dispose_engine
 
 DESCRIPTION = """
@@ -67,11 +68,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         provider_configured=settings.provider_configured,
         storage_backend=settings.storage_backend,
         rate_limit_backend="redis" if settings.redis_url else "in-memory",
+        cors_origins=settings.cors_origins,
+        db_pool=f"{settings.db_pool_size}+{settings.db_max_overflow}",
     )
     if not settings.provider_configured:
         # Loud, once, at boot. Extraction requests will return 503 rather
         # than invent data (§42).
         logger.warning("application.ai_provider_not_configured")
+
+    # Built here rather than on the first request, so a production
+    # deployment without Redis dies on the deploy instead of hours later
+    # under load, having granted every limit N times over in between.
+    get_rate_limiter()
+
+    if settings.is_production and "*" in settings.cors_origins:
+        raise RuntimeError(
+            "APP_ENV=production refuses a wildcard CORS origin: any page on "
+            "the internet could then drive a signed-in CA's session. Set "
+            "APP_URL to your dashboard's address, or list CORS_ALLOW_ORIGINS."
+        )
     try:
         yield
     finally:
@@ -95,7 +110,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if not settings.is_production else [settings.app_url],
+        allow_origins=settings.cors_origins,
         allow_credentials=False,
         # Every method the app actually routes has to be listed, or the
         # browser's preflight fails and the dashboard sees a network error
