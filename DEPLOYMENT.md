@@ -17,7 +17,7 @@ architecture at this scale buys you complexity and a bigger bill.
 | | Spec | Why this and not less |
 |---|---|---|
 | **App server** | 8 vCPU, 16 GB RAM, 200 GB NVMe | Runs API, workers, Redis, Caddy and the dashboard. CPU is the binding constraint, not RAM. |
-| **GPU** | 1× RTX 4090 / L4, 24 GB VRAM | Reads documents locally. A 7B vision model needs ~16 GB to be quick. See §4 — you may not need this on day one. |
+| **GPU** | 1× RTX 4090 / L4, 24 GB VRAM | Reads documents locally. A 7B vision model needs ~16 GB to be quick. See §5 — you may not need this on day one. |
 | **Postgres** | Managed, 4 vCPU / 16 GB, 100 GB | Managed because you do not want to be the person restoring a database at midnight. |
 | **Object storage** | 500 GB, ap-south-1 | Only once you run more than one app server. Skip initially. |
 | **Domains** | `api.example.com`, `app.example.com` | Both must resolve to the app server *before* first start or the TLS challenge fails. |
@@ -73,7 +73,93 @@ add the second app server, not after.
 
 ---
 
-## 3. Deploying
+## 3. Setting up the four external pieces
+
+Two of these are work and two are waiting. **Start the waiting first** —
+Meta's reviews are the long pole and nothing else depends on them.
+
+### Day 0: start the clock at Meta
+
+Nothing below unblocks until these are approved, and approval is not
+something you can hurry:
+
+1. **Business verification.** Meta Business Suite → Security Centre. They
+   want incorporation or GST documents and they reject blurry scans. Days,
+   sometimes a couple of weeks.
+2. **Submit the message template**, as soon as you have a WhatsApp Business
+   Account — you do not need the server running. Reviewed separately from
+   verification, usually faster.
+
+   Category **Utility** (not Marketing — Marketing costs more and gets
+   rejected for this wording). Four variables, positional:
+
+   ```
+   Namaste {{2}}, {{1}} here. For {{3}} we still need {{4}}.
+   Kindly share on WhatsApp when you get a moment.
+   ```
+
+   `{{1}}` firm · `{{2}}` client · `{{3}}` period · `{{4}}` what is
+   outstanding. **The count matters:** WhatsApp fills them positionally and
+   rejects a mismatch at send time with error 132000 — on a real client's
+   chase, not in testing. Preflight checks the count for you.
+
+3. **A phone number that has never been on consumer WhatsApp.** One already
+   on the normal app cannot be moved without deleting that account first.
+   Buy a fresh SIM if you are unsure.
+4. **A permanent system-user token.** Business Settings → System Users → Add
+   → Generate Token, with `whatsapp_business_messaging` and
+   `whatsapp_business_management`. **Not** the token the Getting Started
+   panel offers you — that one expires in 24 hours and will look like a bug
+   three days later. Preflight names this failure specifically (code 190).
+
+### Day 1: Redis and Ollama, which need nobody's permission
+
+Both come up with the stack; neither needs an account.
+
+**Redis** needs no configuration at all — `docker-compose.prod.yml` starts
+it and the API is pointed at it. It is deliberately not persistent
+(`--save "" --appendonly no`): rate-limit counters are disposable, so losing
+them in a restart costs one minute of limits and there is no reason to pay
+for durability. Preflight verifies it by incrementing a key, which is what
+the rate limiter actually does.
+
+**Ollama** needs one command after the first start, and this is the step
+people forget:
+
+```bash
+docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen2.5vl:7b
+```
+
+Without it the container is running and answering, and every extraction
+returns 503. It is a few GB, so do it before you need it. On a CPU-only box
+drop the `deploy.resources` block from the `ollama` service first — slow,
+but it works.
+
+### Day 1: DNS, so Caddy can do its job
+
+Caddy gets Let's Encrypt certificates automatically **on first start**, and
+it can only do that if the names already resolve here:
+
+```bash
+dig +short api.example.com     # must be this server's IP
+dig +short app.example.com
+```
+
+Point both A records before the first `up -d`. Start Caddy before DNS has
+propagated and you get a certificate error rather than a site — recoverable
+with `docker compose restart caddy` once the records are right, but easier
+to avoid.
+
+### Day 2 onwards: the waiting
+
+Bring the stack up with `WHATSAPP_PROVIDER=whatsapp_cloud` and whatever
+credentials you have. Preflight will tell you precisely what Meta is still
+withholding, and you re-run it as each approval lands. When it is all green,
+send one message to **your own phone** before any client sees it.
+
+---
+
+## 4. Deploying
 
 On a GPU box, install the **NVIDIA container toolkit** first — without it
 the `ollama` service fails to start and the error names the missing runtime
@@ -105,6 +191,43 @@ to stamp the same revision.
 **Verify before you point a customer at it:**
 
 ```bash
+docker compose -f docker-compose.prod.yml exec api python /app/scripts/preflight.py
+```
+
+That is the whole check, and it is the one to trust: it does not read your
+configuration and tell you what it implies, it talks to each dependency and
+reports what came back. Postgres is checked by querying it, Redis by counting
+in it (which is what the rate limiter does — a `PING` a read-only replica
+would also answer proves nothing), Ollama by asking which models it has
+actually loaded, WhatsApp by asking Meta, and TLS by completing a handshake
+against your own domain. A check that cannot run says `skipped`; it never
+says `ok`.
+
+```
+[  ok  ] PostgreSQL          connected, schema at 0008_invitations
+[  ok  ] Redis               reachable, and counts
+[  ok  ] Model (Ollama)      qwen2.5vl:7b is loaded
+[  ok  ] WhatsApp            +91 98000 12345 (Sharma & Associates) is live
+[  ok  ] WhatsApp template   'document_chase' is approved and takes 4 variables
+[  ok  ] DNS                 api.example.com resolves to 203.0.113.10
+[  ok  ] Caddy / TLS         a valid certificate is being served
+```
+
+It exits non-zero if anything required is broken, so CI or a deploy script
+can gate on it. `--json` for machine output. Locally: `make preflight`.
+
+The three failures it is really there to catch, because each looks like
+nothing until a client is waiting:
+
+| What it says | What actually happened |
+|---|---|
+| `'qwen2.5vl:7b' is not among its models` | Ollama is up; nobody ran `ollama pull`. Extraction 503s. |
+| `Meta refused: ... (code 190)` | The access token was the temporary one. It lasted 24 hours. |
+| `'document_chase' exists but is PENDING` | Meta has not approved the template, so the first chase to any client who has not written to you today cannot be sent at all. |
+
+The plain HTTP checks, if you want them separately:
+
+```bash
 curl https://api.example.com/health     # {"status":"ok"}
 curl https://api.example.com/ready      # checks the database too
 curl -I http://api.example.com          # 308 redirect to https
@@ -133,7 +256,7 @@ time, so changing `API_DOMAIN` needs a rebuild of `web`, not a restart.
 
 ---
 
-## 4. Monthly cost
+## 5. Monthly cost
 
 Rupee figures are indicative at ~₹85/USD and move — **check current
 pricing before you commit to anything.** Cloud providers change prices and
@@ -228,7 +351,7 @@ the right structure; the exact numbers need current rate cards.
 
 ---
 
-## 5. Before a real customer
+## 6. Before a real customer
 
 Security:
 
@@ -256,7 +379,7 @@ Honesty, which is the part that costs you a customer if you skip it:
 
 ---
 
-## 6. What is still unproven
+## 7. What is still unproven
 
 Said plainly, because a deployment guide that implies more confidence than
 exists is how people get hurt.

@@ -8,7 +8,7 @@ PIP      := $(BACKEND)/.venv/bin/pip
 
 .PHONY: help setup setup-sdk setup-web up down stack stack-down stack-logs \
 	migrate revision run worker web build-web test test-pg test-sdk test-web \
-	lint lint-sdk lint-web purge clean
+	lint lint-sdk lint-web preflight purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -88,6 +88,9 @@ lint-web: ## Typecheck the dashboard
 
 fmt: ## Format and auto-fix
 	cd $(BACKEND) && .venv/bin/ruff check --fix . && .venv/bin/ruff format .
+
+preflight: ## Check every external dependency is actually working
+	$(PY) scripts/preflight.py
 
 purge: ## Delete documents past their retention window
 	$(PY) scripts/purge_expired_documents.py

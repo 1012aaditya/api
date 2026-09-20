@@ -1318,9 +1318,28 @@ deployment can be wired up without changing the env contract.
 ### Running it for real
 
 [**DEPLOYMENT.md**](DEPLOYMENT.md) is the production runbook: the stack in
-[`deploy/`](deploy), what to provision, the connection-pool arithmetic that
-decides whether filing day works, a monthly cost breakdown, and the checklist
-to clear before a paying customer is pointed at it.
+[`deploy/`](deploy), what to provision, the order to set up Redis, Caddy,
+WhatsApp and Ollama in, the connection-pool arithmetic that decides whether
+filing day works, a monthly cost breakdown, and the checklist to clear
+before a paying customer is pointed at it.
+
+```bash
+make preflight
+```
+
+Checks every external dependency by **using** it, not by reading your
+configuration and inferring: Postgres is queried, Redis is counted in (a
+`PING` a read-only replica would also answer proves nothing), Ollama is asked
+which models it has actually loaded, WhatsApp is asked of Meta, and TLS is a
+real handshake against your own domain. A check that cannot run reports
+`skipped` — never `ok`. Non-zero exit if anything required is broken, so a
+deploy can gate on it.
+
+It exists for three failures that each look like nothing until a client is
+waiting: Ollama running with the model never pulled, a WhatsApp token that
+was the temporary 24-hour one, and a message template Meta has not approved
+yet — without which the first chase to any client who has not written to you
+today cannot be sent at all.
 
 `APP_ENV=production` is not a label. It refuses to start on four things that
 look like nothing in development:
