@@ -5,18 +5,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CardDetail } from "@/components/CardDetail";
 import { Canvas, type Viewport } from "@/components/Canvas";
+import {
+  FirmChip,
+  FirmPanel,
+  PANEL_LABELS,
+  PANEL_ORDER,
+  type PanelKey,
+} from "@/components/FirmPanels";
 import { Button, ErrorNotice, Spinner } from "@/components/ui";
 import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
-import type { AgentRunResult, BoardCard, BoardData } from "@/lib/types";
+import type { AgentRunResult, BoardCard, BoardData, CommandCentre } from "@/lib/types";
 
 /* --- layout ------------------------------------------------------------
  * Cards are laid out, never placed by hand. Position means state, so a
  * card somebody dragged would be a lie the board tells about a client.
  *
- * Opening a card does not dock a panel on the right: the card grows where
- * it stands, and the cards below and to the right of it move out of the
- * way. You never lose the place of the client you are working on.       */
+ * Two kinds of object share the board: a client, and a piece of the firm's
+ * own work — what needs a person, your tasks, what clients have said, the
+ * agent, documents coming in. They sit in a column of their own on the
+ * left and open exactly as a client card does, which is the point: one
+ * board and one gesture, rather than a sidebar of pages.
+ *
+ * Opening anything keeps its coordinates and moves what it would cover.  */
 
 const COLUMN_WIDTH = 300;
 const COLUMN_GAP = 40;
@@ -24,8 +35,14 @@ const CARD_HEIGHT = 128;
 const CARD_GAP = 14;
 const HEADER = 92;
 
+const FIRM_WIDTH = 248;
+const FIRM_HEIGHT = 62;
+const FIRM_GAP = 12;
+
 const DETAIL_WIDTH = 660;
 const DETAIL_HEIGHT = 470;
+const PANEL_WIDTH = 560;
+const PANEL_HEIGHT = 440;
 
 const ZONE_TONE: Record<string, { bar: string; text: string }> = {
   needs_you: { bar: "bg-critical", text: "text-critical" },
@@ -35,7 +52,15 @@ const ZONE_TONE: Record<string, { bar: string; text: string }> = {
   clear: { bar: "bg-axis", text: "text-muted" },
 };
 
-/* --- a card, closed --------------------------------------------------- */
+/** Column 0 is the firm's own work; the zones follow it. */
+function columnX(column: number) {
+  if (column <= 0) return 0;
+  return FIRM_WIDTH + COLUMN_GAP + (column - 1) * (COLUMN_WIDTH + COLUMN_GAP);
+}
+
+type Opened = { kind: "client"; key: string } | { kind: "panel"; key: PanelKey };
+
+/* --- a client card, closed -------------------------------------------- */
 
 function Card({
   card,
@@ -98,17 +123,18 @@ function Card({
 
 export default function BoardPage() {
   const [board, setBoard] = useState<BoardData | null>(null);
+  const [summary, setSummary] = useState<CommandCentre | null>(null);
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [opened, setOpened] = useState<Opened | null>(null);
   const [run, setRun] = useState<AgentRunResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [viewport, setViewport] = useState<Viewport>({ x: 48, y: 24, scale: 0.85 });
   const [glide, setGlide] = useState(false);
   const search = useRef<HTMLInputElement>(null);
   const stage = useRef<HTMLDivElement>(null);
-  /** Where the eye was before a card was opened, to give it back after. */
+  /** Where the eye was before something was opened, to give it back after. */
   const restore = useRef<Viewport | null>(null);
   const settle = useRef<number | null>(null);
 
@@ -120,16 +146,18 @@ export default function BoardPage() {
     settle.current = window.setTimeout(() => setGlide(false), 340);
   }, []);
 
-  useEffect(() => () => {
-    if (settle.current) window.clearTimeout(settle.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (settle.current) window.clearTimeout(settle.current);
+    },
+    [],
+  );
 
   /** Scale so every column is on screen, which is what "fit" has to mean
    *  on a board whose whole point is seeing the month at once. */
   const fit = useCallback(() => {
     const width = stage.current?.clientWidth ?? 0;
-    const columns = board?.zones.length ?? 5;
-    const content = columns * (COLUMN_WIDTH + COLUMN_GAP);
+    const content = columnX((board?.zones.length ?? 5) + 1);
     const scale = width ? Math.min(1, Math.max(0.3, (width - 48) / content)) : 0.85;
     glideTo({ x: 24, y: 16, scale });
   }, [board, glideTo]);
@@ -137,7 +165,14 @@ export default function BoardPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      setBoard(await apiGet<BoardData>("/v1/board"));
+      // Two calls for the whole screen: the clients, and the firm's own
+      // numbers. Both are aggregates the API already builds in one pass.
+      const [next, centre] = await Promise.all([
+        apiGet<BoardData>("/v1/board"),
+        apiGet<CommandCentre>("/v1/command-centre"),
+      ]);
+      setBoard(next);
+      setSummary(centre);
     } catch (caught) {
       if (caught instanceof ApiRequestError) setError(caught);
       else throw caught;
@@ -164,36 +199,112 @@ export default function BoardPage() {
   );
   const found = board?.cards.filter(matches).length ?? 0;
 
+  /* --- what the firm's own cards say --------------------------------- */
+
+  const replied = useMemo(() => {
+    const since = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    return (board?.cards ?? []).filter(
+      (card) => card.last_response_at && Date.parse(card.last_response_at) > since,
+    ).length;
+  }, [board]);
+
+  const chipLines: Record<PanelKey, { line: string; urgent: boolean }> = {
+    attention: {
+      line: summary
+        ? summary.exceptions_open === 0
+          ? "Nothing waiting on you"
+          : `${summary.exceptions_open} waiting on you`
+        : "—",
+      urgent: (summary?.exceptions_open ?? 0) > 0,
+    },
+    tasks: {
+      line: summary
+        ? `${summary.tasks_open} open${summary.tasks_overdue ? ` · ${summary.tasks_overdue} overdue` : ""}`
+        : "—",
+      urgent: (summary?.tasks_overdue ?? 0) > 0,
+    },
+    replies: {
+      line: replied === 0 ? "No replies in two days" : `${replied} replied in two days`,
+      urgent: false,
+    },
+    agent: {
+      line: summary
+        ? summary.agent_enabled
+          ? `${summary.messages_sent_today} of ${summary.message_limit_per_day} sent today`
+          : "Stopped"
+        : "—",
+      urgent: summary ? !summary.agent_enabled : false,
+    },
+    documents: {
+      line: summary
+        ? summary.documents_awaiting_review === 0
+          ? "Nothing to look at"
+          : `${summary.documents_awaiting_review} need a look`
+        : "—",
+      urgent: (summary?.documents_awaiting_review ?? 0) > 0,
+    },
+  };
+
   /* --- where everything sits, given what is open --------------------- */
 
   const layout = useMemo(() => {
     const zones = board?.zones ?? [];
+
+    const panels = PANEL_ORDER.map((panel, row) => ({
+      kind: "panel" as const,
+      key: panel as string,
+      panel,
+      card: null,
+      column: 0,
+      row,
+      baseLeft: 0,
+      baseTop: HEADER + row * (FIRM_HEIGHT + FIRM_GAP),
+      collapsedWidth: FIRM_WIDTH,
+      collapsedHeight: FIRM_HEIGHT,
+      openWidth: PANEL_WIDTH,
+      openHeight: PANEL_HEIGHT,
+    }));
+
     const rows: Record<string, number> = {};
-    const base = (board?.cards ?? []).map((card) => {
+    const clients = (board?.cards ?? []).map((card) => {
       const zoneIndex = Math.max(
         zones.findIndex((zone) => zone.key === card.zone),
         0,
       );
       const row = rows[card.zone] ?? 0;
       rows[card.zone] = row + 1;
-      return { card, zoneIndex, row };
+      return {
+        kind: "client" as const,
+        key: card.client_id,
+        panel: null,
+        card,
+        column: zoneIndex + 1,
+        row,
+        baseLeft: columnX(zoneIndex + 1),
+        baseTop: HEADER + row * (CARD_HEIGHT + CARD_GAP),
+        collapsedWidth: COLUMN_WIDTH,
+        collapsedHeight: CARD_HEIGHT,
+        openWidth: DETAIL_WIDTH,
+        openHeight: DETAIL_HEIGHT,
+      };
     });
 
-    const open = base.find((entry) => entry.card.client_id === openId) ?? null;
-    const dx = DETAIL_WIDTH - COLUMN_WIDTH;
-    const dy = DETAIL_HEIGHT - CARD_HEIGHT;
+    const all = [...panels, ...clients];
+    const open =
+      opened === null
+        ? null
+        : all.find((item) => item.kind === opened.kind && item.key === opened.key) ?? null;
 
-    // The opened card keeps its own coordinates; only what it would cover
+    // The opened object keeps its own coordinates; only what it would cover
     // moves. That is what makes the growth read as this card, not a panel.
-    const placed = base.map((entry) => ({
-      ...entry,
-      left:
-        entry.zoneIndex * (COLUMN_WIDTH + COLUMN_GAP) +
-        (open && entry.zoneIndex > open.zoneIndex ? dx : 0),
+    const dx = open ? open.openWidth - open.collapsedWidth : 0;
+    const dy = open ? open.openHeight - open.collapsedHeight : 0;
+
+    const placed = all.map((item) => ({
+      ...item,
+      left: item.baseLeft + (open && item.column > open.column ? dx : 0),
       top:
-        HEADER +
-        entry.row * (CARD_HEIGHT + CARD_GAP) +
-        (open && entry.zoneIndex === open.zoneIndex && entry.row > open.row ? dy : 0),
+        item.baseTop + (open && item.column === open.column && item.row > open.row ? dy : 0),
     }));
 
     const tallest = Math.max(...zones.map((zone) => zone.count), 1);
@@ -201,48 +312,71 @@ export default function BoardPage() {
       open,
       placed,
       columns: zones.map(
-        (_, index) =>
-          index * (COLUMN_WIDTH + COLUMN_GAP) + (open && index > open.zoneIndex ? dx : 0),
+        (_, index) => columnX(index + 1) + (open && index + 1 > open.column ? dx : 0),
       ),
-      width: Math.max(zones.length, 1) * (COLUMN_WIDTH + COLUMN_GAP) + (open ? dx : 0),
-      height: HEADER + tallest * (CARD_HEIGHT + CARD_GAP) + (open ? dy : 0) + 80,
+      width: columnX(Math.max(zones.length, 1) + 1) + dx,
+      height:
+        Math.max(
+          HEADER + tallest * (CARD_HEIGHT + CARD_GAP),
+          HEADER + PANEL_ORDER.length * (FIRM_HEIGHT + FIRM_GAP),
+        ) +
+        dy +
+        80,
     };
-  }, [board, openId]);
-
-  const opened = layout.open;
+  }, [board, opened]);
 
   const close = useCallback(() => {
-    if (!openId) return;
-    setOpenId(null);
+    if (!opened) return;
+    setOpened(null);
     if (restore.current) {
       glideTo(restore.current);
       restore.current = null;
     }
-  }, [openId, glideTo]);
+  }, [opened, glideTo]);
 
-  /** Open a card where it stands, and bring the eye to it. */
-  const open = useCallback(
-    (card: BoardCard, left: number, top: number) => {
+  /**
+   * Open something where it stands, and bring the eye to it.
+   *
+   * The coordinates are the object's own — the ones it has when nothing is
+   * open — because an opened object never moves itself out of the way.
+   */
+  const openAt = useCallback(
+    (next: Opened, left: number, top: number, width: number, height: number) => {
       const frame = stage.current;
-      setOpenId(card.client_id);
+      setOpened(next);
       if (!frame) return;
       if (!restore.current) restore.current = viewport;
-      const width = frame.clientWidth;
-      const height = frame.clientHeight;
+      const stageWidth = frame.clientWidth;
+      const stageHeight = frame.clientHeight;
       const scale = Math.min(
         1,
-        Math.max(
-          0.45,
-          Math.min((width - 80) / DETAIL_WIDTH, (height - 80) / DETAIL_HEIGHT),
-        ),
+        Math.max(0.45, Math.min((stageWidth - 80) / width, (stageHeight - 80) / height)),
       );
       glideTo({
         scale,
-        x: width / 2 - (left + DETAIL_WIDTH / 2) * scale,
-        y: height / 2 - (top + DETAIL_HEIGHT / 2) * scale,
+        x: stageWidth / 2 - (left + width / 2) * scale,
+        y: stageHeight / 2 - (top + height / 2) * scale,
       });
     },
     [viewport, glideTo],
+  );
+
+  /** Used by the firm's panels: "open their card" means this board's card. */
+  const openClient = useCallback(
+    (clientId: string) => {
+      const target = layout.placed.find(
+        (item) => item.kind === "client" && item.key === clientId,
+      );
+      if (!target) return;
+      openAt(
+        { kind: "client", key: clientId },
+        target.baseLeft,
+        target.baseTop,
+        DETAIL_WIDTH,
+        DETAIL_HEIGHT,
+      );
+    },
+    [layout, openAt],
   );
 
   // "/" focuses search — the fastest way to find one client among four
@@ -288,7 +422,7 @@ export default function BoardPage() {
   }
 
   return (
-    <div className="fixed inset-0 flex flex-col lg:left-56">
+    <div className="fixed inset-0 flex flex-col lg:left-44">
       {/* --- the bar ---------------------------------------------------- */}
       <header className="z-20 flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-ink">The month</h1>
@@ -351,6 +485,15 @@ export default function BoardPage() {
           glide={glide}
         >
           <div style={{ width: layout.width, height: layout.height }}>
+            {/* the firm's own column */}
+            <div className="absolute" style={{ left: 0, top: 0, width: FIRM_WIDTH }}>
+              <div className="h-1 w-full rounded-full bg-ink-2" />
+              <p className="mt-2 text-sm font-semibold text-ink">Your firm</p>
+              <p className="mt-0.5 text-xs text-muted">
+                Everything that is not one client&apos;s.
+              </p>
+            </div>
+
             {board?.zones.map((zone, index) => (
               <div
                 key={zone.key}
@@ -367,31 +510,74 @@ export default function BoardPage() {
               </div>
             ))}
 
-            {layout.placed.map(({ card, left, top }) => {
-              const isOpen = card.client_id === openId;
+            {layout.placed.map((item) => {
+              const isOpen =
+                opened !== null && opened.kind === item.kind && opened.key === item.key;
               return (
                 <div
-                  key={card.client_id}
+                  key={`${item.kind}:${item.key}`}
                   className="absolute transition-[left,top] duration-300 ease-out"
-                  style={{ left, top, zIndex: isOpen ? 10 : 1 }}
+                  style={{ left: item.left, top: item.top, zIndex: isOpen ? 10 : 1 }}
                 >
-                  {isOpen ? (
-                    <div className="card-open">
-                      <CardDetail
-                        card={card}
-                        width={DETAIL_WIDTH}
-                        height={DETAIL_HEIGHT}
-                        onClose={close}
-                        onChanged={load}
+                  {item.kind === "client" && item.card ? (
+                    isOpen ? (
+                      <div className="card-open">
+                        <CardDetail
+                          card={item.card}
+                          width={DETAIL_WIDTH}
+                          height={DETAIL_HEIGHT}
+                          onClose={close}
+                          onChanged={load}
+                        />
+                      </div>
+                    ) : (
+                      <Card
+                        card={item.card}
+                        dimmed={!matches(item.card) || opened !== null}
+                        onOpen={() =>
+                          openAt(
+                            { kind: "client", key: item.key },
+                            item.baseLeft,
+                            item.baseTop,
+                            DETAIL_WIDTH,
+                            DETAIL_HEIGHT,
+                          )
+                        }
                       />
-                    </div>
-                  ) : (
-                    <Card
-                      card={card}
-                      dimmed={!matches(card) || (opened !== null && !isOpen)}
-                      onOpen={() => open(card, left, top)}
-                    />
-                  )}
+                    )
+                  ) : item.panel ? (
+                    isOpen ? (
+                      <div className="card-open">
+                        <FirmPanel
+                          panel={item.panel}
+                          width={PANEL_WIDTH}
+                          height={PANEL_HEIGHT}
+                          summary={summary}
+                          onClose={close}
+                          onChanged={load}
+                          onOpenClient={openClient}
+                        />
+                      </div>
+                    ) : (
+                      <FirmChip
+                        panel={item.panel}
+                        line={chipLines[item.panel].line}
+                        urgent={chipLines[item.panel].urgent}
+                        width={FIRM_WIDTH}
+                        height={FIRM_HEIGHT}
+                        dimmed={opened !== null}
+                        onOpen={() =>
+                          openAt(
+                            { kind: "panel", key: item.panel as PanelKey },
+                            item.baseLeft,
+                            item.baseTop,
+                            PANEL_WIDTH,
+                            PANEL_HEIGHT,
+                          )
+                        }
+                      />
+                    )
+                  ) : null}
                 </div>
               );
             })}
@@ -407,12 +593,16 @@ export default function BoardPage() {
         )}
 
         <p className="pointer-events-none absolute bottom-3 left-4 z-10 text-xs text-muted">
-          {opened
-            ? "Everything about them is here · Esc, or click the paper, to close"
-            : "Click a card to open it in place · drag to pan · ⌘/ctrl + scroll to zoom · / to find a client"}
+          {layout.open
+            ? `${
+                layout.open.kind === "client"
+                  ? "Everything about them is here"
+                  : PANEL_LABELS[layout.open.key as PanelKey]
+              } · Esc, or click the paper, to close`
+            : "Click anything to open it in place · drag to pan · ⌘/ctrl + scroll to zoom · / to find a client"}
         </p>
         <div className="absolute bottom-3 right-4 z-10 flex gap-1.5">
-          {opened && (
+          {layout.open && (
             <Button size="sm" onClick={close}>
               Back to the board
             </Button>
