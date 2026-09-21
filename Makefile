@@ -8,7 +8,7 @@ PIP      := $(BACKEND)/.venv/bin/pip
 
 .PHONY: help setup setup-sdk setup-web up down stack stack-down stack-logs \
 	migrate revision run worker web build-web test test-pg test-sdk test-web \
-	lint lint-sdk lint-web preflight purge clean
+	lint lint-sdk lint-web preflight accuracy purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -91,6 +91,10 @@ fmt: ## Format and auto-fix
 
 preflight: ## Check every external dependency is actually working
 	$(PY) scripts/preflight.py
+
+accuracy: ## Measure extraction accuracy: make accuracy dir=~/truth
+	@test -n "$(dir)" || (echo "Usage: make accuracy dir=~/truth" && exit 1)
+	$(PY) scripts/measure_accuracy.py $(dir)
 
 purge: ## Delete documents past their retention window
 	$(PY) scripts/purge_expired_documents.py

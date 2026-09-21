@@ -1315,6 +1315,43 @@ Every setting, with its default, is documented in
 storage and auth layers are self-hosted. They exist so a Supabase-backed
 deployment can be wired up without changing the env contract.
 
+### Measuring whether it actually works
+
+No accuracy figure is published anywhere in this repository, because none
+has been measured. [`scripts/measure_accuracy.py`](scripts/measure_accuracy.py)
+is how you change that — against your own invoices, on your own machine:
+
+```bash
+make accuracy dir=~/truth      # documents + an expected.csv naming them
+```
+
+It runs the real pipeline, not a reimplementation of it, and it is built to
+stop the resulting number from flattering:
+
+* **Three failures, counted apart.** A *wrong* value reaches a GST filing. An
+  *invented* one — a value where the page had nothing — is the same danger
+  and a direct breach of the rule that an unreadable field is `null`. A
+  *missed* field is an honest null that costs somebody ten minutes. Averaging
+  those into one percentage tells a CA nothing about their actual risk.
+* **Small samples are reported as small.** Every rate carries a Wilson
+  interval, and below roughly 100 documents the report prints the range and
+  **refuses the headline figure** rather than hand you something to paste
+  into a deck (§30, §33).
+* **A document it cannot read is reported, never skipped** — a run that
+  quietly dropped its hard cases would report an accuracy belonging to the
+  easy ones.
+* **Every disagreement is listed.** Some of them will be mistakes in your
+  `expected.csv`, and finding those is part of the job.
+
+It also answers the question a CA actually has, which is not "how accurate is
+it" but "can I trust the ones it is sure about and review only the rest".
+That is only true if the confidence score is calibrated, so the report
+measures accuracy within each confidence band and says plainly that if the
+top band is not clearly better than the bottom, the score means nothing.
+
+**Point it at real invoices and keep them out of the repository** (§32). The
+directory is read, never copied.
+
 ### Running it for real
 
 [**DEPLOYMENT.md**](DEPLOYMENT.md) is the production runbook: the stack in
