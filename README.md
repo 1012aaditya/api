@@ -114,9 +114,29 @@ JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
 ### 3. Start dependencies and migrate
 
 ```bash
-make up             # Postgres + Redis + MinIO
+make up             # Postgres + Redis + MinIO, in Docker
 make migrate        # alembic upgrade head
 ```
+
+**Running Postgres natively instead of in Docker?** Homebrew and Postgres.app
+create a superuser named after your account, not `docuparse`, so the first
+connection fails with `role "docuparse" does not exist`. Create it once:
+
+```bash
+make db-local       # creates the docuparse role and database
+```
+
+Or by hand, which is all that target does:
+
+```bash
+psql postgres -c "CREATE ROLE docuparse WITH LOGIN SUPERUSER PASSWORD 'docuparse';"
+createdb -O docuparse docuparse
+```
+
+A missing database does not stop the API from starting — it reports itself
+unready instead, so a deployment can retry rather than crash-loop. That means
+`Application startup complete` is not proof of a working stack;
+`curl localhost:8000/ready` is.
 
 ### 4. Run
 

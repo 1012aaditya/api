@@ -8,7 +8,7 @@ PIP      := $(BACKEND)/.venv/bin/pip
 
 .PHONY: help setup setup-sdk setup-web up down stack stack-down stack-logs \
 	migrate revision run worker web build-web test test-pg test-sdk test-web \
-	lint lint-sdk lint-web preflight accuracy purge clean
+	lint lint-sdk lint-web preflight accuracy db-local purge clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -34,6 +34,15 @@ up: ## Start only the backing services (Postgres), for host-side development
 
 down: ## Stop them
 	docker compose down
+
+db-local: ## Create the docuparse role and database in a native Postgres
+	@# Homebrew and Postgres.app make a superuser named after your account,
+	@# so the first connection fails with 'role "docuparse" does not exist'.
+	@psql postgres -c "CREATE ROLE docuparse WITH LOGIN SUPERUSER PASSWORD 'docuparse';" \
+		|| echo "  (role already exists, or psql could not reach a server)"
+	@createdb -O docuparse docuparse \
+		|| echo "  (database already exists, or psql could not reach a server)"
+	@echo "Ready. Next: make migrate"
 
 migrate: ## Apply database migrations
 	cd $(BACKEND) && .venv/bin/alembic upgrade head
