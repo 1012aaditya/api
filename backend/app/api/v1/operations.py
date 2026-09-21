@@ -36,6 +36,7 @@ from app.models import (
     Task,
     TaskStatus,
 )
+from app.models.requirement import can_transition
 from app.repositories.clients import CaseRepository, ClientRepository, RequirementRepository
 from app.repositories.operations import (
     AgentEventRepository,
@@ -62,13 +63,15 @@ from app.schemas.operations import (
     MessageOut,
     PlannedClientOut,
     RequirementOut,
+    RequirementPatch,
     ResolveExceptionIn,
+    SendMessageIn,
     TaskIn,
     TaskOut,
 )
 from app.services.client_import import MAX_ROWS, ImportPlan, PlannedClient, plan_import
 from app.services.ingestion import refresh_case_status
-from app.services.messaging import SENT_ACTION
+from app.services.messaging import SENT_ACTION, MessagingService
 
 router = APIRouter(tags=["operations"])
 
@@ -94,6 +97,19 @@ def _client_out(client: Client, **extra) -> ClientOut:
         last_response_at=client.last_response_at,
         created_at=client.created_at,
         **extra,
+    )
+
+
+def _message_out(message) -> MessageOut:
+    return MessageOut(
+        id=message.id,
+        direction=message.direction,
+        type=message.type,
+        body=message.body,
+        status=message.status,
+        detected_intent=message.detected_intent,
+        sent_by_agent=bool(message.sent_by_agent),
+        created_at=message.created_at,
     )
 
 
@@ -881,16 +897,7 @@ async def list_conversations(
                 status=conversation.status,
                 last_message_at=conversation.last_message_at,
                 messages=[
-                    MessageOut(
-                        id=message.id,
-                        direction=message.direction,
-                        type=message.type,
-                        body=message.body,
-                        status=message.status,
-                        detected_intent=message.detected_intent,
-                        sent_by_agent=bool(message.sent_by_agent),
-                        created_at=message.created_at,
-                    )
+                    _message_out(message)
                     for message in messages
                 ],
             )
@@ -1104,3 +1111,110 @@ async def import_clients(
     await db.commit()
 
     return SuccessResponse(request_id=request_id, data=_plan_out(plan, applied=True))
+
+@router.patch(
+    "/requirements/{requirement_id}",
+    response_model=SuccessResponse[RequirementOut],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    summary="Mark a requirement received or waived",
+)
+async def update_requirement(
+    requirement_id: str,
+    payload: RequirementPatch,
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[RequirementOut]:
+    """A person saying what the system could not see.
+
+    A bank statement handed over at the office, or a document the firm has
+    decided it does not need, are both things only a person knows. The
+    state machine still applies: this cannot take a requirement somewhere
+    it may not go, and it says so rather than forcing it (§29).
+    """
+    repository = RequirementRepository(db)
+    requirement = await repository.get(auth.organization_id, requirement_id)
+    if requirement is None:
+        raise NotFoundError("No requirement with that id exists in this firm.")
+
+    # A requirement hangs off a case, not a client, and the timeline is read
+    # per client — so the case supplies the name this belongs under.
+    case = await CaseRepository(db).get(auth.organization_id, requirement.case_id)
+
+    if payload.status is not None:
+        if not can_transition(requirement.status, payload.status):
+            raise InvalidRequestError(
+                f"{requirement.label} is {requirement.status!r} and cannot become "
+                f"{payload.status!r}."
+            )
+        was = requirement.status
+        requirement.move_to(payload.status)
+        await AgentEventRepository(db).record(
+            organization_id=auth.organization_id,
+            client_id=case.client_id if case else None,
+            case_id=requirement.case_id,
+            actor_type=ActorType.USER,
+            actor_id=auth.user.id if auth.user else None,
+            action="requirement.changed",
+            summary=(
+                f"{requirement.label} marked {payload.status} by a person"
+                if payload.status != RequirementStatus.WAIVED
+                else f"{requirement.label} is no longer needed"
+            ),
+            details={"from": was, "to": payload.status},
+        )
+
+    if payload.note is not None:
+        requirement.reason = payload.note or None
+
+    await db.flush()
+    # The case's status is derived from its requirements, so changing one by
+    # hand has to recompute it — otherwise the board keeps showing blocked.
+    if case is not None:
+        await refresh_case_status(db, case)
+    await db.commit()
+    return SuccessResponse(request_id=request_id, data=_requirement_out(requirement))
+
+
+@router.post(
+    "/clients/{client_id}/messages",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SuccessResponse[MessageOut],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    summary="Send this client a message yourself",
+)
+async def send_message(
+    client_id: str,
+    payload: SendMessageIn,
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[MessageOut]:
+    """A person typing, not the agent.
+
+    Recorded as sent by a user, so the timeline never credits the agent
+    with something a person wrote (§28). The firm's own caps still apply —
+    a client who asked not to be contacted is not contacted because
+    somebody typed it by hand — and a refusal comes back as a readable
+    error rather than a silent no-op.
+    """
+    client = await ClientRepository(db).get(auth.organization_id, client_id)
+    if client is None:
+        raise NotFoundError("No client with that id exists in this firm.")
+
+    attempt = await MessagingService(db, settings=settings).send_with_reason(
+        client,
+        payload.body.strip(),
+        case_id=payload.case_id,
+        automated=False,
+        actor_type=ActorType.USER,
+        actor_id=auth.user.id if auth.user else None,
+    )
+    await db.commit()
+
+    if attempt.message is None:
+        raise InvalidRequestError(
+            attempt.reason or "That message could not be sent."
+        )
+    return SuccessResponse(request_id=request_id, data=_message_out(attempt.message))

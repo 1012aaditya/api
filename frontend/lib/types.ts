@@ -673,3 +673,4 @@ export interface BoardData {
   zones: BoardZone[];
   cards: BoardCard[];
 }
+

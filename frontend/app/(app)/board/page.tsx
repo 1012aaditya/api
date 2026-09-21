@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { BoardInspector } from "@/components/BoardInspector";
 import { Canvas, type Viewport } from "@/components/Canvas";
 import { Badge, Button, ErrorNotice, Spinner } from "@/components/ui";
 import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
@@ -322,80 +323,12 @@ export default function BoardPage() {
       </div>
 
         {selected && (
-          <aside className="h-full w-80 shrink-0 overflow-y-auto border-l border-line bg-surface p-5">
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-base font-semibold text-ink">{selected.name}</h2>
-              <button
-                className="text-sm text-muted hover:text-ink"
-                onClick={() => setSelected(null)}
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="mt-2">
-              <Badge>{board?.zones.find((z) => z.key === selected.zone)?.label}</Badge>
-            </div>
-            <p className="mt-2 text-sm text-ink-2">{selected.reason}</p>
-
-            {selected.outstanding.length > 0 && (
-              <>
-                <p className="mt-5 text-xs font-medium uppercase tracking-wide text-muted">
-                  Still waiting on
-                </p>
-                <ul className="mt-1.5 space-y-1">
-                  {selected.outstanding.map((item) => (
-                    <li key={item} className="text-sm text-ink">
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            <p className="mt-5 text-xs font-medium uppercase tracking-wide text-muted">
-              Where things stand
-            </p>
-            <dl className="mt-1.5 space-y-1 text-sm">
-              {[
-                ["Period", selected.period ?? "—"],
-                [
-                  "Deadline",
-                  selected.days_left === null
-                    ? "—"
-                    : selected.days_left < 0
-                      ? `${Math.abs(selected.days_left)} days overdue`
-                      : `${selected.days_left} days left`,
-                ],
-                ["Last asked", relativeTime(selected.last_contacted_at)],
-                ["Last reply", relativeTime(selected.last_response_at)],
-                ["Automated", selected.automated ? "yes" : "no"],
-              ].map(([label, value]) => (
-                <div key={label} className="flex justify-between gap-3">
-                  <dt className="text-ink-2">{label}</dt>
-                  <dd className="text-ink">{value}</dd>
-                </div>
-              ))}
-            </dl>
-
-            <div className="mt-6 flex flex-col gap-2">
-              <Link href={`/clients/${selected.client_id}`}>
-                <Button variant="primary" className="w-full">
-                  Open this client
-                </Button>
-              </Link>
-              {selected.exceptions > 0 && (
-                <Link href="/exceptions">
-                  <Button variant="secondary" className="w-full">
-                    See what needs a person
-                  </Button>
-                </Link>
-              )}
-            </div>
-          </aside>
+          <BoardInspector
+            card={selected}
+            onClose={() => setSelected(null)}
+            onChanged={load}
+          />
         )}
-
       </div>
     </div>
   );

@@ -272,3 +272,128 @@ def test_every_zone_has_a_label_and_a_note(zone):
 
     assert ZONE_LABELS[zone]
     assert ZONE_NOTES[zone]
+
+
+# --- acting from the board ----------------------------------------------
+#
+# The board is only useful as a single surface if the things a CA does all
+# day can be done without leaving it. Two of those are a person overriding
+# the machine, and both have to respect the rules the machine follows.
+
+
+async def test_a_person_can_say_a_document_arrived(
+    client: httpx.AsyncClient, auth_headers, tenant: Tenant
+):
+    """A bank statement handed over at the office is something only a
+    person knows."""
+    created = await add_client(client, auth_headers, "Handed Over Traders")
+    case = await open_case(client, auth_headers, created["id"])
+    requirement = case["requirements"][0]
+
+    updated = data(
+        await client.patch(
+            f"/v1/requirements/{requirement['id']}",
+            headers=auth_headers,
+            json={"status": "received"},
+        )
+    )
+
+    assert updated["status"] == "received"
+
+
+async def test_a_requirement_cannot_be_moved_somewhere_it_may_not_go(
+    client: httpx.AsyncClient, auth_headers
+):
+    """The state machine is not advisory just because a person is asking
+    (§29). It says no, and says why."""
+    created = await add_client(client, auth_headers, "Illegal Move Traders")
+    case = await open_case(client, auth_headers, created["id"])
+    requirement = case["requirements"][0]
+
+    response = await client.patch(
+        f"/v1/requirements/{requirement['id']}",
+        headers=auth_headers,
+        json={"status": "valid"},
+    )
+
+    assert response.status_code == 400
+    assert "cannot become" in response.json()["error"]["message"]
+
+
+async def test_waiving_a_requirement_unblocks_the_case(
+    client: httpx.AsyncClient, auth_headers, tenant: Tenant
+):
+    """"We don't need that one" is a decision the firm makes, and the board
+    should show the effect immediately."""
+    created = await add_client(client, auth_headers, "Waived Traders")
+    case = await open_case(client, auth_headers, created["id"])
+
+    for requirement in case["requirements"]:
+        await client.patch(
+            f"/v1/requirements/{requirement['id']}",
+            headers=auth_headers,
+            json={"status": "waived"},
+        )
+
+    card = card_for(await board_for(tenant.organization_id), "Waived Traders")
+
+    assert card.outstanding == []
+    assert card.zone in {"reading", "ready"}
+
+
+async def test_a_person_can_write_their_own_message(
+    client: httpx.AsyncClient, auth_headers
+):
+    created = await add_client(client, auth_headers, "Typed At Traders")
+
+    sent = data(
+        await client.post(
+            f"/v1/clients/{created['id']}/messages",
+            headers=auth_headers,
+            json={"body": "Namaste, could you send the bank statement today?"},
+        )
+    )
+
+    assert sent["direction"] == "outbound"
+    assert sent["sent_by_agent"] is False, "the agent was credited with a person's words"
+
+
+async def test_a_typed_message_still_respects_an_opt_out(
+    client: httpx.AsyncClient, auth_headers
+):
+    """A client who asked not to be contacted is not contacted because
+    somebody typed it by hand."""
+    created = await add_client(client, auth_headers, "Opted Out Traders")
+    await client.patch(
+        f"/v1/clients/{created['id']}",
+        headers=auth_headers,
+        json={"allow_automated_contact": False},
+    )
+
+    response = await client.post(
+        f"/v1/clients/{created['id']}/messages",
+        headers=auth_headers,
+        json={"body": "Just checking in."},
+    )
+
+    assert response.status_code == 400
+
+
+async def test_another_firms_client_cannot_be_messaged(
+    client: httpx.AsyncClient, auth_headers, other_tenant: Tenant
+):
+    created = await add_client(client, auth_headers, "Ours Traders")
+
+    signed_in = await client.post(
+        "/v1/auth/login",
+        json={"email": other_tenant.email, "password": other_tenant.password},
+    )
+    stranger = {"Authorization": f"Bearer {data(signed_in)['access_token']}"}
+
+    response = await client.post(
+        f"/v1/clients/{created['id']}/messages",
+        headers=stranger,
+        json={"body": "hello"},
+    )
+
+    assert response.status_code == 404

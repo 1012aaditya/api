@@ -275,3 +275,19 @@ class ImportPlanOut(BaseModel):
     error: str | None = None
     #: True only for the endpoint that actually wrote rows.
     applied: bool = False
+
+
+class RequirementPatch(BaseModel):
+    """A person saying what the system could not see.
+
+    The state machine still decides whether the move is legal; this only
+    carries the intent.
+    """
+
+    status: str | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class SendMessageIn(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+    case_id: str | None = None
