@@ -17,7 +17,8 @@ import {
   Spinner,
   StatusBadge,
 } from "@/components/ui";
-import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
+import { ApiRequestError, apiDelete, apiGet, apiSend } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { dateTime, relativeTime } from "@/lib/format";
 import {
   caseState,
@@ -30,6 +31,7 @@ import type {
   AgentEvent,
   ComplianceCase,
   Conversation,
+  ErasureReceipt,
   PracticeClient,
 } from "@/lib/types";
 
@@ -48,6 +50,14 @@ export default function ClientPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [error, setError] = useState<ApiRequestError | null>(null);
+  const { user } = useAuth();
+  const [erasing, setErasing] = useState(false);
+  const [confirmName, setConfirmName] = useState("");
+  const [erased, setErased] = useState<ErasureReceipt | null>(null);
+  // Erasure is the most destructive thing the API does, and it refuses
+  // a staff login outright. Offering the control anyway would be a
+  // button whose only outcome is a 403.
+  const mayErase = user?.role === "owner" || user?.role === "admin";
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [period, setPeriod] = useState(thisPeriod);
@@ -130,6 +140,23 @@ export default function ClientPage() {
         )}
       </>
     );
+  }
+
+  async function erase() {
+    setErasing(true);
+    setError(null);
+    try {
+      setErased(
+        await apiDelete<ErasureReceipt>(
+          `/v1/privacy/clients/${client!.id}?confirm=${encodeURIComponent(confirmName)}`,
+        ),
+      );
+    } catch (caught) {
+      if (caught instanceof ApiRequestError) setError(caught);
+      else throw caught;
+    } finally {
+      setErasing(false);
+    }
   }
 
   const stand = contactState(client.contact_state);
@@ -339,6 +366,84 @@ export default function ClientPage() {
           </Card>
         </div>
       </div>
+
+      {erased ? (
+        <Card className="mt-6 border-critical/30">
+          <CardHeader
+            title={`${erased.client_name} has been erased`}
+            description="What was removed, so nobody has to take it on trust."
+          />
+          <div className="space-y-3 px-5 py-4 text-sm text-ink-2">
+            <p>
+              <span className="tnum font-semibold text-ink">
+                {erased.rows_deleted}
+              </span>{" "}
+              records deleted across{" "}
+              {Object.keys(erased.by_table).length} tables, and{" "}
+              <span className="tnum font-semibold text-ink">
+                {erased.objects_deleted}
+              </span>{" "}
+              stored file{erased.objects_deleted === 1 ? "" : "s"} removed.
+            </p>
+            {!erased.complete && (
+              <p className="text-critical">
+                {erased.objects_failed} stored file
+                {erased.objects_failed === 1 ? "" : "s"} could not be deleted. The
+                records are gone, but those files are still on disk and need
+                removing by hand.
+              </p>
+            )}
+            {Object.keys(erased.unlinked).length > 0 && (
+              <p>
+                Usage counts were kept with the link to this client removed —
+                that is your billing record, and it now identifies nobody.
+              </p>
+            )}
+            <Link href="/clients">
+              <Button variant="primary">Back to clients</Button>
+            </Link>
+          </div>
+        </Card>
+      ) : (
+        mayErase && (
+          <Card className="mt-6 border-critical/30">
+            <CardHeader
+              title="Erase this client"
+              description="Everything held about them, including the documents and what was read from them. Immediate, and there is no undo."
+            />
+            <div className="px-5 py-4">
+              <p className="mb-3 text-sm text-ink-2">
+                Type{" "}
+                <span className="font-medium text-ink">
+                  {client.business_name ?? client.name}
+                </span>{" "}
+                to confirm. Your usage counts are kept, with the link to this
+                client removed.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-64">
+                  <Input
+                    value={confirmName}
+                    onChange={(e) => setConfirmName(e.target.value)}
+                    placeholder={client.business_name ?? client.name}
+                  />
+                </span>
+                <Button
+                  variant="danger"
+                  disabled={
+                    erasing ||
+                    confirmName.trim().toLowerCase() !==
+                      (client.business_name ?? client.name).trim().toLowerCase()
+                  }
+                  onClick={() => void erase()}
+                >
+                  {erasing ? "Erasing…" : "Erase permanently"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        )
+      )}
     </>
   );
 }

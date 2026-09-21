@@ -25,6 +25,7 @@ const NAV: { heading: string; items: NavItem[] }[] = [
       { href: "/conversations", label: "Conversations" },
       { href: "/agent", label: "Agent" },
       { href: "/team", label: "Your firm" },
+      { href: "/privacy", label: "Client data" },
     ],
   },
   {

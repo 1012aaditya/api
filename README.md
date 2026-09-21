@@ -1315,6 +1315,43 @@ Every setting, with its default, is documented in
 storage and auth layers are self-hosted. They exist so a Supabase-backed
 deployment can be wired up without changing the env contract.
 
+### What a CA partner will ask before signing
+
+Three questions, every time: where does this live, who can see it, and can I
+get a client's data removed.
+
+The third one is a capability, not a paragraph. An owner or administrator
+can erase a client from that client's page — the client record, their cases
+and what each was waiting for, every document and its stored bytes, every
+value read out of those documents, every message and call, and the tasks and
+agent decisions about them. Immediate, irreversible, and it returns a receipt
+saying how many rows went from which tables and whether every stored file
+was actually deleted. If one survived it says so, rather than reporting
+success.
+
+The firm's **usage counts survive, with the link to the client broken**. That
+count is the basis of what they were billed and identifies nobody. A test
+asserts that every table carrying a `client_id` is reached by the erasure, so
+a table added later fails the suite rather than turning up in a subject
+access request.
+
+The first two questions are answered by **Client data** in the dashboard,
+generated from the running configuration rather than written once:
+
+| | |
+|---|---|
+| Where documents are read | Three states, not two. `stays_here` is provable. `cannot_be_proven` is what a compose service name gets — the model may well be on that very machine, and the page will not claim it when it cannot show it. It says what to change to make it provable. |
+| How long files are kept | The real retention window, and when the next deletion is due |
+| Who else sees it | Every third party *this* configuration sends data to, named, with what each receives. Empty means nothing leaves. |
+
+[`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/DPA.md`](docs/DPA.md) are
+**drafts for a lawyer**, written to describe what the code actually does —
+which is the part a downloaded template gets wrong. They claim compliance
+with nothing, including the DPDP Act 2023; that determination is your
+counsel's (§14). The privacy draft says plainly that deleting a document
+does not delete the values read out of it, because that is true and most
+policies omit it.
+
 ### Measuring whether it actually works
 
 No accuracy figure is published anywhere in this repository, because none

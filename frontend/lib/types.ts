@@ -571,3 +571,32 @@ export interface ImportPlan {
   /** True only for the response that actually wrote rows. */
   applied: boolean;
 }
+
+/* --- privacy ---------------------------------------------------------- */
+
+export interface PrivacyFootprint {
+  retention_days: number;
+  next_purge_at: string | null;
+  generated_at: string;
+  storage_backend: string;
+  /** "no_model" | "stays_here" | "cannot_be_proven" — three states on purpose. */
+  document_locality: string;
+  locality_note: string;
+  model_endpoint: string | null;
+  extraction_configured: boolean;
+  whatsapp_provider: string;
+  voice_provider: string;
+  counts: Record<string, number>;
+  processors: { name: string; receives: string }[];
+}
+
+export interface ErasureReceipt {
+  client_id: string;
+  client_name: string;
+  rows_deleted: number;
+  by_table: Record<string, number>;
+  unlinked: Record<string, number>;
+  objects_deleted: number;
+  objects_failed: number;
+  complete: boolean;
+}
