@@ -1542,8 +1542,10 @@ Honest scope. These are designed for but not implemented:
   against a scripted transport; no Exotel account has been connected from
   here, and the flow that does the talking is something you build on their
   side.
-- **Billing** — usage tracking is billing-ready; no payment provider is
-  integrated.
+- **Taking money.** Plans, allowances, overage and a monthly statement are
+  built; no payment provider is integrated and none can be from here, so a
+  firm settles by bank transfer or UPI and somebody records it. Changing a
+  firm's plan is a database edit, not a page.
 - **A hosted endpoint.** `docker compose up` runs the whole stack on one
   machine; nothing is deployed anywhere for customers to call.
 - **An async Python client**, webhook helpers in the SDK, and a JavaScript SDK.
@@ -1552,8 +1554,19 @@ Honest scope. These are designed for but not implemented:
   into Tally itself. Import into a test company before trusting it.
 - **Other accounting software** — Busy, Marg, Zoho Books and Vyapar are not
   supported. The CSV export is the fallback.
-- **Evaluation harness** — the synthetic corpus generator exists in
-  `tests/fixtures/`; field-level accuracy scoring does not.
+- **A way for a stranger to become a customer.** Signup creates a firm, but
+  there is no pricing page, no plan selection and no onboarding a person
+  could complete without somebody walking them through it. The first
+  customers are onboarded by hand, deliberately.
+- **The production stack, run end to end.** `deploy/` validates and the app
+  boots in production mode against real Postgres and Redis, but the build
+  host here could not pull base images, so Caddy, Ollama, the TLS handshake
+  and the dashboard image have never run. See DEPLOYMENT.md §7.
+- **An accuracy figure.** The harness is built —
+  [`scripts/measure_accuracy.py`](scripts/measure_accuracy.py) scores per
+  field, separates wrong from invented from missed, and refuses a headline
+  below roughly a hundred documents. Nobody has run it against real
+  invoices, so there is still no number.
 
 No accuracy figure is published anywhere in this repository, because none has
 been measured. Nor is anything here a statement about whether a filing made
