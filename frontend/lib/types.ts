@@ -600,3 +600,41 @@ export interface ErasureReceipt {
   objects_failed: number;
   complete: boolean;
 }
+
+/* --- billing ---------------------------------------------------------- */
+
+export interface Plan {
+  key: string;
+  name: string;
+  description: string;
+  monthly_price: string;
+  /** What the price includes. Not a cap — going over is charged, not blocked. */
+  included_documents: number;
+  overage_per_document: string;
+  /** This one is enforced: adding a client is never urgent. */
+  included_clients: number;
+  ceiling_documents: number;
+  voice_available: boolean;
+  is_current: boolean;
+}
+
+export interface Statement {
+  organization_name: string;
+  period: string;
+  /** True while the month is still running. */
+  provisional: boolean;
+  plan: Plan;
+  documents_used: number;
+  documents_included: number;
+  overage_documents: number;
+  clients: number;
+  lines: { label: string; detail: string; amount: string }[];
+  subtotal: string;
+  tax_rate: string;
+  tax: string;
+  total: string;
+  currency: string;
+  note: string;
+  payment_note: string;
+  warnings: string[];
+}

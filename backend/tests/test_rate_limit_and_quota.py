@@ -30,6 +30,28 @@ async def _set_limits(
         await session.commit()
 
 
+async def _set_usage(organization_id: str, *, count: int) -> None:
+    """Put an organization this far into the month, without the documents.
+
+    Billable usage events are what the allowance counts, so writing them
+    directly gets to the interesting state without processing hundreds of
+    invoices to reach it.
+    """
+    from app.repositories.usage import UsageRepository
+
+    async with get_session_factory()() as session:
+        repository = UsageRepository(session)
+        for _ in range(count):
+            await repository.record(
+                organization_id=organization_id,
+                endpoint="/v1/invoices/extract",
+                status_code=200,
+                success=True,
+                billable=True,
+            )
+        await session.commit()
+
+
 async def test_requests_past_the_limit_get_429(
     client: httpx.AsyncClient, tenant: Tenant
 ) -> None:
@@ -75,9 +97,11 @@ async def test_limits_are_per_organization(
     ).status_code == 200
 
 
-async def test_monthly_quota_blocks_extraction_with_403(
+async def test_an_explicit_ceiling_blocks_extraction_with_403(
     client: httpx.AsyncClient, tenant: Tenant, use_provider, stub_provider: StubProvider
 ) -> None:
+    """An operator who set monthly_document_quota meant it, so it stands as
+    the ceiling for that organization."""
     use_provider(stub_provider)
     await _set_limits(tenant.organization_id, quota=1)
 
@@ -92,7 +116,31 @@ async def test_monthly_quota_blocks_extraction_with_403(
     )
     assert second.status_code == 403
     assert second.json()["error"]["code"] == "quota_exceeded"
-    assert second.json()["error"]["details"]["quota"] == 1
+    assert second.json()["error"]["details"]["ceiling"] == 1
+
+
+async def test_passing_the_plan_allowance_does_not_stop_the_work(
+    client: httpx.AsyncClient, tenant: Tenant, use_provider, stub_provider: StubProvider
+) -> None:
+    """The behaviour this exists for. A firm on the 18th with a filing due
+    on the 20th cannot retry tomorrow, so the allowance bills rather than
+    blocks — the ceiling is a separate, far higher number."""
+    from app.services.plans import get_plan
+
+    use_provider(stub_provider)
+    plan = get_plan("trial")
+    # One document past what the plan includes, and far below the ceiling.
+    await _set_usage(tenant.organization_id, count=plan.included_documents + 1)
+
+    response = await client.post(
+        ENDPOINT,
+        files={"file": ("i.pdf", build_invoice_pdf(), "application/pdf")},
+        headers=tenant.headers,
+    )
+
+    assert response.status_code == 200, (
+        "a firm past its allowance was blocked; it should have been billed"
+    )
 
 
 async def test_quota_counts_only_billable_events(

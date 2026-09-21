@@ -28,6 +28,7 @@ def _build_v1_router() -> APIRouter:
         api_keys,
         auth,
         batches,
+        billing,
         documents,
         exports,
         inbound,
@@ -52,6 +53,7 @@ def _build_v1_router() -> APIRouter:
     router.include_router(exports.router)
     router.include_router(tally.router)
     router.include_router(inbound.router)
+    router.include_router(billing.router)
     router.include_router(operations.router)
     router.include_router(privacy.router)
     router.include_router(team.router)

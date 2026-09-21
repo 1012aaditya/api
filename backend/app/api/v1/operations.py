@@ -18,7 +18,7 @@ from app.api.deps import (
     require_privileged,
 )
 from app.core.config import Settings, get_settings
-from app.core.errors import InvalidRequestError, NotFoundError
+from app.core.errors import InvalidRequestError, NotFoundError, QuotaExceededError
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.models import (
@@ -128,6 +128,42 @@ async def _names(db: AsyncSession, organization_id: str) -> dict[str, str]:
 # --- clients ------------------------------------------------------------
 
 
+async def _check_client_allowance(
+    db: AsyncSession, auth: AuthContext, *, adding: int
+) -> None:
+    """Refuse a client the plan does not cover.
+
+    Unlike the document allowance this is a real limit, and the difference
+    is deliberate: adding a client is a considered act nobody's filing
+    deadline turns on, so refusing it costs an upgrade conversation rather
+    than a missed return.
+    """
+    from app.services.plans import get_plan
+
+    plan = get_plan(auth.organization.plan)
+    held = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Client)
+                .where(Client.organization_id == auth.organization_id)
+            )
+        ).scalar_one()
+    )
+    if held + adding > plan.included_clients:
+        raise QuotaExceededError(
+            f"The {plan.name} plan covers {plan.included_clients} clients and "
+            f"you have {held}. Move up a plan to add "
+            f"{'more' if adding == 1 else f'another {adding}'}.",
+            details={
+                "plan": plan.key,
+                "included_clients": plan.included_clients,
+                "clients": held,
+                "adding": adding,
+            },
+        )
+
+
 @router.post(
     "/clients",
     status_code=status.HTTP_201_CREATED,
@@ -140,6 +176,7 @@ async def create_client(
     db: AsyncSession = Depends(get_db),
     request_id: str = Depends(get_request_id),
 ) -> SuccessResponse[ClientOut]:
+    await _check_client_allowance(db, auth, adding=1)
     client = await ClientRepository(db).create(
         auth.organization_id, **payload.model_dump()
     )
@@ -1031,6 +1068,10 @@ async def import_clients(
     plan = await _read_and_plan(file, auth, db)
     if plan.error and not plan.planned:
         raise InvalidRequestError(plan.error)
+
+    # The same allowance the one-at-a-time endpoint checks. Importing 300
+    # clients on a plan covering 100 must not be the way around it.
+    await _check_client_allowance(db, auth, adding=len(plan.to_create))
 
     repository = ClientRepository(db)
     events = AgentEventRepository(db)

@@ -204,14 +204,38 @@ async def enforce_document_quota(
     auth: AuthContext = Depends(enforce_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
-    """Monthly document allowance. Unlike the rate limiter, this never fails open."""
+    """The runaway guard, and only that.
+
+    A plan's document allowance is what the monthly price includes, not a
+    limit on what the software will do. A CA firm that hit a wall on the
+    18th, with a GST filing due on the 20th, could not simply retry
+    tomorrow — and it would happen every month to every firm that grew.
+    So going past the allowance costs money and changes nothing else; the
+    statement shows it and the dashboard warns before it happens.
+
+    What this stops is the ceiling: a number far above any plan's allowance,
+    reached by a runaway loop or an abusive account and never by an ordinary
+    busy month. An organization with an explicit ``monthly_document_quota``
+    keeps that as its ceiling, because an operator who set one meant it.
+    """
+    from app.services.plans import get_plan
+
     now: dt.datetime = utcnow()
     used = await UsageRepository(db).billable_count_this_month(auth.organization_id, now=now)
-    quota = auth.monthly_document_quota
-    if used >= quota:
+
+    plan = get_plan(auth.organization.plan)
+    ceiling = auth.organization.monthly_document_quota or plan.ceiling_documents
+
+    if used >= ceiling:
         raise QuotaExceededError(
-            f"Monthly quota of {quota} documents has been used.",
-            details={"quota": quota, "used": used},
+            f"{used} documents this month, against a ceiling of {ceiling}. "
+            "This is a runaway guard rather than your plan's allowance — if "
+            "the volume is genuine, ask for the ceiling to be raised.",
+            details={
+                "ceiling": ceiling,
+                "used": used,
+                "included_in_plan": plan.included_documents,
+            },
         )
     return auth
 

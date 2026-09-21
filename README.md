@@ -1315,6 +1315,40 @@ Every setting, with its default, is documented in
 storage and auth layers are self-hosted. They exist so a Supabase-backed
 deployment can be wired up without changing the env contract.
 
+### Plans, and why the allowance is not a wall
+
+A developer who hits an API quota retries tomorrow. A CA firm that hits one
+on the 18th, with a GST filing due on the 20th, cannot — and it would happen
+every month to every firm that grew. Cutting a practice off at the moment it
+is busiest is the most damaging thing this software could do to it.
+
+So a plan's document allowance is **what the monthly price includes, not a
+limit on what the software will do**. Past it the work continues and the
+overage appears on the statement. The thing that does block is a ceiling set
+far above any allowance, and it exists to catch a runaway loop or an abusive
+account — never an ordinary busy month.
+
+The **client** limit is enforced, and the difference is deliberate: adding a
+client is a considered act nobody's filing deadline turns on, so refusing it
+costs an upgrade conversation rather than a missed return. Bulk import checks
+the same allowance, so importing 300 clients is not the way around it.
+
+A firm is warned at 80% of its allowance and told plainly when it is into
+overage, because a bill nobody saw coming is its own kind of harm.
+
+**No payment is collected, and none can be.** There is no payment provider
+here, and a button that looked like it charged a card while doing nothing
+would be the worst version of §42. The statement says so and names bank
+transfer or UPI instead.
+
+It is also a **statement, not a tax invoice**. A tax invoice under the GST
+Act has required particulars, a serial from a maintained series and a
+place-of-supply determination, and getting any of them wrong is the
+customer's problem as much as the issuer's — particularly when the customer
+is themselves a CA firm. The tax line is shown, labelled as a calculation at
+a configured rate, and the statement says to confirm it with an accountant
+(§14).
+
 ### What a CA partner will ask before signing
 
 Three questions, every time: where does this live, who can see it, and can I

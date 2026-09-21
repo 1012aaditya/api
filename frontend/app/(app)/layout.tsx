@@ -26,6 +26,7 @@ const NAV: { heading: string; items: NavItem[] }[] = [
       { href: "/agent", label: "Agent" },
       { href: "/team", label: "Your firm" },
       { href: "/privacy", label: "Client data" },
+      { href: "/billing", label: "Plan and usage" },
     ],
   },
   {
