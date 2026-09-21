@@ -247,3 +247,31 @@ class AgentRunOut(BaseModel):
     scheduled: int
     sent: int
     skipped: list[str] = Field(default_factory=list)
+
+
+# --- importing a client list (§onboarding) -------------------------------
+
+
+class PlannedClientOut(BaseModel):
+    """One row of the uploaded file, and what would become of it."""
+
+    #: 1-based with the header as row 1, so it matches what the firm sees
+    #: in Excel when they go and fix something.
+    row_number: int
+    verdict: str
+    name: str | None = None
+    reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    matches: str | None = None
+    #: The values that would be written. Shown so nothing is a surprise.
+    values: dict[str, object] = Field(default_factory=dict)
+
+
+class ImportPlanOut(BaseModel):
+    counts: dict[str, int]
+    rows: list[PlannedClientOut]
+    recognised_columns: dict[str, str]
+    ignored_columns: list[str] = Field(default_factory=list)
+    error: str | None = None
+    #: True only for the endpoint that actually wrote rows.
+    applied: bool = False

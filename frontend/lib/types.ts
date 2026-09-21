@@ -548,3 +548,26 @@ export interface InvitationCreated extends Invitation {
   accept_url: string;
   note: string;
 }
+
+/* --- importing a client list ----------------------------------------- */
+
+export interface PlannedClient {
+  /** 1-based with the header as row 1, so it matches what the firm sees in Excel. */
+  row_number: number;
+  verdict: "create" | "skip" | "duplicate";
+  name: string | null;
+  reason: string | null;
+  warnings: string[];
+  matches: string | null;
+  values: Record<string, unknown>;
+}
+
+export interface ImportPlan {
+  counts: { rows: number; create: number; duplicate: number; skip: number; warnings: number };
+  rows: PlannedClient[];
+  recognised_columns: Record<string, string>;
+  ignored_columns: string[];
+  error: string | null;
+  /** True only for the response that actually wrote rows. */
+  applied: boolean;
+}

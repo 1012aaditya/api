@@ -93,9 +93,14 @@ export default function ClientsPage() {
         title="Clients"
         description="Everyone whose filings you handle, and where each one stands."
         action={
-          <Button variant="primary" onClick={() => setAdding((open) => !open)}>
-            {adding ? "Cancel" : "Add a client"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link href="/clients/import">
+              <Button variant="secondary">Import a list</Button>
+            </Link>
+            <Button variant="primary" onClick={() => setAdding((open) => !open)}>
+              {adding ? "Cancel" : "Add a client"}
+            </Button>
+          </div>
         }
       />
 

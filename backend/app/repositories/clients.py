@@ -114,6 +114,32 @@ class ClientRepository:
         )
         return result.scalars().first()
 
+    async def existing_identifiers(
+        self, organization_id: str
+    ) -> tuple[set[str], set[str], set[str]]:
+        """The GSTINs, WhatsApp numbers and client codes this firm already has.
+
+        Three columns rather than whole rows: a firm with 500 clients would
+        otherwise load 500 objects to answer a question about three strings.
+        Upper-cased so matching is not defeated by how somebody typed it.
+        """
+        result = await self.session.execute(
+            select(Client.gstin, Client.whatsapp_phone, Client.client_code).where(
+                Client.organization_id == organization_id
+            )
+        )
+        gstins: set[str] = set()
+        phones: set[str] = set()
+        codes: set[str] = set()
+        for gstin, phone, code in result:
+            if gstin:
+                gstins.add(gstin.strip().upper())
+            if phone:
+                phones.add(phone.strip().upper())
+            if code:
+                codes.add(code.strip().upper())
+        return gstins, phones, codes
+
     async def create(self, organization_id: str, **fields: object) -> Client:
         if "gstin" in fields:
             fields["gstin"] = normalize_gstin(fields.get("gstin")) or None  # type: ignore[arg-type]

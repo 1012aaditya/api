@@ -7,7 +7,7 @@ holds — an API key that leaked should not be able to enumerate it.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,12 +58,15 @@ from app.schemas.operations import (
     CommandCentre,
     ConversationOut,
     ExceptionOut,
+    ImportPlanOut,
     MessageOut,
+    PlannedClientOut,
     RequirementOut,
     ResolveExceptionIn,
     TaskIn,
     TaskOut,
 )
+from app.services.client_import import MAX_ROWS, ImportPlan, PlannedClient, plan_import
 from app.services.ingestion import refresh_case_status
 from app.services.messaging import SENT_ACTION
 
@@ -931,3 +934,132 @@ async def command_centre(
             agent_enabled=policy.enabled,
         ),
     )
+
+
+# --- importing a client list --------------------------------------------
+
+#: A client list is text. Generously bounded — 5,000 rows of a wide
+#: spreadsheet is well under this, and the row cap does the real limiting.
+MAX_IMPORT_BYTES = 8 * 1024 * 1024
+
+
+def _plan_out(plan: ImportPlan, *, applied: bool = False) -> ImportPlanOut:
+    return ImportPlanOut(
+        counts=plan.counts,
+        rows=[
+            PlannedClientOut(
+                row_number=row.row_number,
+                verdict=row.verdict,
+                name=row.name,
+                reason=row.reason,
+                warnings=row.warnings,
+                matches=row.matches,
+                values=row.values,
+            )
+            for row in plan.planned
+        ],
+        recognised_columns=plan.recognised_columns,
+        ignored_columns=plan.ignored_columns,
+        error=plan.error,
+        applied=applied,
+    )
+
+
+async def _read_and_plan(
+    upload: UploadFile, auth: AuthContext, db: AsyncSession
+) -> ImportPlan:
+    content = await upload.read()
+    if len(content) > MAX_IMPORT_BYTES:
+        raise InvalidRequestError(
+            f"That file is larger than {MAX_IMPORT_BYTES // (1024 * 1024)} MB. "
+            f"A client list is text; at most {MAX_ROWS} rows are read at once."
+        )
+
+    gstins, phones, codes = await ClientRepository(db).existing_identifiers(
+        auth.organization_id
+    )
+    return plan_import(
+        content,
+        existing_gstins=gstins,
+        existing_phones=phones,
+        existing_codes=codes,
+    )
+
+
+@router.post(
+    "/clients/import/preview",
+    response_model=SuccessResponse[ImportPlanOut],
+    summary="See what importing a client list would do",
+)
+async def preview_client_import(
+    file: UploadFile = File(..., description="CSV exported from Tally or Excel."),
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[ImportPlanOut]:
+    """Writes nothing.
+
+    A CA pointing this at their real client list should be able to see
+    exactly what will happen before any of it does — which rows become
+    clients, which are already there, which cannot be read and why.
+    """
+    plan = await _read_and_plan(file, auth, db)
+    return SuccessResponse(request_id=request_id, data=_plan_out(plan))
+
+
+@router.post(
+    "/clients/import",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SuccessResponse[ImportPlanOut],
+    responses={400: {"model": ErrorResponse}},
+    summary="Import a client list",
+)
+async def import_clients(
+    file: UploadFile = File(..., description="CSV exported from Tally or Excel."),
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[ImportPlanOut]:
+    """Create the clients the plan says to create, and report what happened.
+
+    The file is read again rather than trusting a plan the caller hands
+    back, so nothing can be created that this did not itself decide to
+    create. The response has the same shape as the preview, so the two can
+    be compared — and it describes what was actually written, not what was
+    predicted.
+    """
+    plan = await _read_and_plan(file, auth, db)
+    if plan.error and not plan.planned:
+        raise InvalidRequestError(plan.error)
+
+    repository = ClientRepository(db)
+    events = AgentEventRepository(db)
+    created: list[PlannedClient] = []
+
+    for row in plan.to_create:
+        client = await repository.create(auth.organization_id, **row.values)
+        created.append(row)
+        await events.record(
+            organization_id=auth.organization_id,
+            client_id=client.id,
+            actor_type=ActorType.USER,
+            actor_id=auth.user.id if auth.user else None,
+            action="client.created",
+            summary=f"{client.display_name} was added by import",
+            details={"source": "csv_import", "row": row.row_number},
+        )
+
+    await events.record(
+        organization_id=auth.organization_id,
+        actor_type=ActorType.USER,
+        actor_id=auth.user.id if auth.user else None,
+        action="clients.imported",
+        summary=(
+            f"{len(created)} clients imported from a file of "
+            f"{plan.counts['rows']} rows"
+        ),
+        details=plan.counts,
+    )
+    await db.commit()
+
+    return SuccessResponse(request_id=request_id, data=_plan_out(plan, applied=True))

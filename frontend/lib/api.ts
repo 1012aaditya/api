@@ -141,13 +141,26 @@ export async function apiDelete<T>(path: string): Promise<T> {
 }
 
 /**
- * Upload endpoints return their result at the top level, not under `data` —
- * both `/v1/invoices/extract` and `/v1/documents`.
+ * Upload where the endpoint returns its result at the top level, not under
+ * `data` — `/v1/invoices/extract` and `/v1/documents` both predate the
+ * envelope and are shaped that way.
+ *
+ * Newer upload endpoints use the ordinary envelope, like the rest of the
+ * API. Those want `apiUploadEnvelope`; picking the wrong one here gives you
+ * an object with no fields and a crash on first render rather than a type
+ * error, so the two are named apart rather than switched by a flag.
  */
 export async function apiUpload<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append("file", file);
   return (await call(path, { method: "POST", body: form })) as T;
+}
+
+/** Upload to an endpoint that wraps its result in { success, request_id, data }. */
+export async function apiUploadEnvelope<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  return ((await call(path, { method: "POST", body: form })) as Envelope<T>).data;
 }
 
 /** Bulk upload: many files under the same `files` field. */
