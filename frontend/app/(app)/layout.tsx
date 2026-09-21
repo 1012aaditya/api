@@ -17,11 +17,7 @@ import { useAuth } from "@/lib/auth";
  * Twenty links on the left made the important three impossible to see. */
 type NavItem = { href: string; label: string; privileged?: boolean };
 
-const PRIMARY: NavItem[] = [
-  { href: "/board", label: "The month" },
-  { href: "/clients", label: "Clients" },
-  { href: "/team", label: "Your firm" },
-];
+const PRIMARY: NavItem[] = [{ href: "/board", label: "The month" }];
 
 const FOLDED: { heading: string; note: string; items: NavItem[] }[] = [
   {
@@ -29,12 +25,14 @@ const FOLDED: { heading: string; note: string; items: NavItem[] }[] = [
     note: "The same work the board holds, in rows.",
     items: [
       { href: "/command-centre", label: "Today" },
+      { href: "/clients", label: "Clients" },
       { href: "/cases", label: "Cases" },
       { href: "/exceptions", label: "Needs a person" },
       { href: "/tasks", label: "Tasks" },
       { href: "/conversations", label: "Conversations" },
       { href: "/agent", label: "Agent" },
       { href: "/documents", label: "Documents" },
+      { href: "/team", label: "Your firm" },
       { href: "/privacy", label: "Client data" },
       { href: "/billing", label: "Plan and usage" },
     ],
@@ -136,7 +134,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </ul>
 
           <p className="mt-3 px-3 text-xs leading-relaxed text-muted">
-            Chasing, replies, documents and tasks are all on the board.
+            Clients, chasing, replies, documents, tasks, your colleagues, the
+            plan — all of it is on the board.
           </p>
 
           {FOLDED.map((group) => {

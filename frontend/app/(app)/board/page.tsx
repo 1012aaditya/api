@@ -15,7 +15,13 @@ import {
 import { Button, ErrorNotice, Spinner } from "@/components/ui";
 import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
-import type { AgentRunResult, BoardCard, BoardData, CommandCentre } from "@/lib/types";
+import type {
+  AgentRunResult,
+  BoardCard,
+  BoardData,
+  CommandCentre,
+  TeamMember,
+} from "@/lib/types";
 
 /* --- layout ------------------------------------------------------------
  * Cards are laid out, never placed by hand. Position means state, so a
@@ -39,10 +45,10 @@ const FIRM_WIDTH = 248;
 const FIRM_HEIGHT = 62;
 const FIRM_GAP = 12;
 
-const DETAIL_WIDTH = 660;
-const DETAIL_HEIGHT = 470;
-const PANEL_WIDTH = 560;
-const PANEL_HEIGHT = 440;
+const DETAIL_WIDTH = 700;
+const DETAIL_HEIGHT = 500;
+const PANEL_WIDTH = 580;
+const PANEL_HEIGHT = 460;
 
 const ZONE_TONE: Record<string, { bar: string; text: string }> = {
   needs_you: { bar: "bg-critical", text: "text-critical" },
@@ -124,11 +130,14 @@ function Card({
 export default function BoardPage() {
   const [board, setBoard] = useState<BoardData | null>(null);
   const [summary, setSummary] = useState<CommandCentre | null>(null);
+  const [team, setTeam] = useState<TeamMember[]>([]);
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [opened, setOpened] = useState<Opened | null>(null);
   const [run, setRun] = useState<AgentRunResult | null>(null);
+  /** Something an opened card said on its way out, e.g. an erasure receipt. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [viewport, setViewport] = useState<Viewport>({ x: 48, y: 24, scale: 0.85 });
   const [glide, setGlide] = useState(false);
@@ -167,12 +176,14 @@ export default function BoardPage() {
     try {
       // Two calls for the whole screen: the clients, and the firm's own
       // numbers. Both are aggregates the API already builds in one pass.
-      const [next, centre] = await Promise.all([
+      const [next, centre, colleagues] = await Promise.all([
         apiGet<BoardData>("/v1/board"),
         apiGet<CommandCentre>("/v1/command-centre"),
+        apiGet<TeamMember[]>("/v1/team"),
       ]);
       setBoard(next);
       setSummary(centre);
+      setTeam(colleagues);
     } catch (caught) {
       if (caught instanceof ApiRequestError) setError(caught);
       else throw caught;
@@ -209,6 +220,25 @@ export default function BoardPage() {
   }, [board]);
 
   const chipLines: Record<PanelKey, { line: string; urgent: boolean }> = {
+    clients: {
+      line: summary
+        ? `${summary.clients_total} on your books${summary.clients_blocked ? ` · ${summary.clients_blocked} blocked` : ""}`
+        : "—",
+      urgent: false,
+    },
+    firm: {
+      line:
+        team.length === 0
+          ? "—"
+          : `${team.length} ${team.length === 1 ? "login" : "logins"}${
+              team.filter((member) => !member.is_active).length
+                ? ` · ${team.filter((member) => !member.is_active).length} off`
+                : ""
+            }`,
+      urgent: false,
+    },
+    plan: { line: "The allowance and what it costs", urgent: false },
+    data: { line: "Retention, and where files live", urgent: false },
     attention: {
       line: summary
         ? summary.exceptions_open === 0
@@ -467,6 +497,18 @@ export default function BoardPage() {
         </div>
       )}
 
+      {notice && (
+        <div className="z-20 border-b border-line bg-surface-sunken px-4 py-2 text-sm text-ink">
+          {notice}
+          <button
+            className="ml-3 text-xs text-muted underline"
+            onClick={() => setNotice(null)}
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="z-20 px-4 py-2">
           <ErrorNotice message={error.message} code={error.code} requestId={error.requestId} />
@@ -528,6 +570,7 @@ export default function BoardPage() {
                           height={DETAIL_HEIGHT}
                           onClose={close}
                           onChanged={load}
+                          onNotice={setNotice}
                         />
                       </div>
                     ) : (

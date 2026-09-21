@@ -29,6 +29,7 @@ from app.models import (
     ComplianceCase,
     Conversation,
     Document,
+    DocumentRequirement,
     DocumentType,
     ExceptionStatus,
     Message,
@@ -53,6 +54,7 @@ from app.schemas.operations import (
     AgentRunOut,
     CaseIn,
     CaseOut,
+    CasePatch,
     ClientIn,
     ClientOut,
     ClientPatch,
@@ -62,6 +64,7 @@ from app.schemas.operations import (
     ImportPlanOut,
     MessageOut,
     PlannedClientOut,
+    RequirementAdd,
     RequirementOut,
     RequirementPatch,
     ResolveExceptionIn,
@@ -124,6 +127,31 @@ def _requirement_out(requirement) -> RequirementOut:
         received_document_id=requirement.received_document_id,
         requested_at=requirement.requested_at,
         received_at=requirement.received_at,
+    )
+
+
+async def _case_out(
+    db: AsyncSession, organization_id: str, case, *, client_name: str | None = None
+) -> CaseOut:
+    """A case with its requirements, built the same way everywhere."""
+    rows = await RequirementRepository(db).for_case(organization_id, case.id)
+    if client_name is None:
+        client = await ClientRepository(db).get(organization_id, case.client_id)
+        client_name = client.display_name if client else None
+    open_exceptions = await ExceptionRepository(db).open_for_case(organization_id, case.id)
+    return CaseOut(
+        id=case.id,
+        client_id=case.client_id,
+        client_name=client_name,
+        type=case.type,
+        period=case.period,
+        label=case.label,
+        deadline=case.deadline,
+        status=case.status,
+        created_at=case.created_at,
+        requirements=[_requirement_out(r) for r in rows],
+        outstanding=[DocumentType.label(r.document_type) for r in rows if r.is_outstanding],
+        open_exceptions=len(open_exceptions),
     )
 
 
@@ -1174,6 +1202,204 @@ async def update_requirement(
         await refresh_case_status(db, case)
     await db.commit()
     return SuccessResponse(request_id=request_id, data=_requirement_out(requirement))
+
+
+@router.delete(
+    "/requirements/{requirement_id}",
+    response_model=SuccessResponse[CaseOut],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    summary="Stop asking for a document",
+)
+async def delete_requirement(
+    requirement_id: str,
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[CaseOut]:
+    """Remove a requirement that should never have been on the list.
+
+    Only one that nothing has arrived against. Once a document is attached
+    the row is part of the record of what happened, and deleting it would
+    quietly erase that — "not needed" is the honest way to close such a
+    requirement, and the error says so.
+    """
+    repository = RequirementRepository(db)
+    requirement = await repository.get(auth.organization_id, requirement_id)
+    if requirement is None:
+        raise NotFoundError("No requirement with that id exists in this firm.")
+
+    if (
+        requirement.received_document_id is not None
+        or requirement.status not in {RequirementStatus.MISSING, RequirementStatus.REQUESTED}
+    ):
+        raise InvalidRequestError(
+            f"{requirement.label} is {requirement.status!r}; something has already "
+            f"happened to it. Mark it 'not needed' instead of removing it."
+        )
+
+    case = await CaseRepository(db).get(auth.organization_id, requirement.case_id)
+    label = requirement.label
+    await db.delete(requirement)
+    await db.flush()
+
+    if case is not None:
+        await refresh_case_status(db, case)
+        await AgentEventRepository(db).record(
+            organization_id=auth.organization_id,
+            client_id=case.client_id,
+            case_id=case.id,
+            actor_type=ActorType.USER,
+            actor_id=auth.user.id if auth.user else None,
+            action="requirement.removed",
+            summary=f"{label} is no longer asked for",
+        )
+    await db.commit()
+
+    if case is None:
+        raise NotFoundError("No case with that id exists in this firm.")
+    return SuccessResponse(
+        request_id=request_id, data=await _case_out(db, auth.organization_id, case)
+    )
+
+
+@router.post(
+    "/cases/{case_id}/requirements",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SuccessResponse[CaseOut],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    summary="Ask the client for one more document",
+)
+async def add_requirement(
+    case_id: str,
+    payload: RequirementAdd,
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[CaseOut]:
+    """The default list is a starting point, not a rule (§I).
+
+    A client whose filing needs a document the defaults do not mention is
+    the ordinary case, not the exception, so adding one is a button rather
+    than a support request.
+    """
+    case = await CaseRepository(db).get(auth.organization_id, case_id)
+    if case is None:
+        raise NotFoundError("No case with that id exists in this firm.")
+
+    if payload.document_type not in DocumentType.ALL:
+        raise InvalidRequestError(
+            f"Unknown document type {payload.document_type!r}. "
+            f"Known types: {', '.join(sorted(DocumentType.ALL))}."
+        )
+
+    repository = RequirementRepository(db)
+    if await repository.match_document_type(
+        auth.organization_id, case.id, payload.document_type
+    ):
+        raise InvalidRequestError(
+            f"{case.label} already asks for {DocumentType.label(payload.document_type)}."
+        )
+
+    requirement = DocumentRequirement(
+        organization_id=auth.organization_id,
+        case_id=case.id,
+        document_type=payload.document_type,
+        required=payload.required,
+        deadline=case.deadline,
+    )
+    db.add(requirement)
+    await db.flush()
+    await refresh_case_status(db, case)
+    await AgentEventRepository(db).record(
+        organization_id=auth.organization_id,
+        client_id=case.client_id,
+        case_id=case.id,
+        actor_type=ActorType.USER,
+        actor_id=auth.user.id if auth.user else None,
+        action="requirement.added",
+        summary=f"{DocumentType.label(payload.document_type)} added to {case.label}",
+    )
+    await db.commit()
+    return SuccessResponse(
+        request_id=request_id, data=await _case_out(db, auth.organization_id, case)
+    )
+
+
+@router.patch(
+    "/cases/{case_id}",
+    response_model=SuccessResponse[CaseOut],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    summary="Say a filing is done, or move its deadline",
+)
+async def update_case(
+    case_id: str,
+    payload: CasePatch,
+    auth: AuthContext = Depends(authenticate_session),
+    db: AsyncSession = Depends(get_db),
+    request_id: str = Depends(get_request_id),
+) -> SuccessResponse[CaseOut]:
+    """Filing on the portal happens outside this system, so somebody has to
+    say it happened. That is the one status a person sets by hand; saying it
+    is not filed after all hands the case back to the derived rule rather
+    than leaving a status nobody can explain (§29).
+    """
+    case = await CaseRepository(db).get(auth.organization_id, case_id)
+    if case is None:
+        raise NotFoundError("No case with that id exists in this firm.")
+
+    changed: dict[str, object] = {}
+
+    if payload.deadline is not None and payload.deadline != case.deadline:
+        was = case.deadline
+        # Requirements seeded from the case carry its deadline; leaving them
+        # on the old date would have the agent chasing to a date the firm
+        # has already moved.
+        for requirement in await RequirementRepository(db).for_case(
+            auth.organization_id, case.id
+        ):
+            if requirement.deadline == was:
+                requirement.deadline = payload.deadline
+        case.deadline = payload.deadline
+        changed["deadline"] = payload.deadline.isoformat()
+
+    if payload.filed is not None:
+        if payload.filed:
+            case.status = CaseStatus.COMPLETED
+            changed["filed"] = True
+        else:
+            # Back under the derived rule: whatever the rows say it is.
+            case.status = CaseStatus.IN_PROGRESS
+            await db.flush()
+            await refresh_case_status(db, case)
+            changed["filed"] = False
+
+    if not changed:
+        raise InvalidRequestError(
+            "Nothing to change. Send 'filed' to say a return has been filed, "
+            "or 'deadline' to move the date."
+        )
+
+    await db.flush()
+    await AgentEventRepository(db).record(
+        organization_id=auth.organization_id,
+        client_id=case.client_id,
+        case_id=case.id,
+        actor_type=ActorType.USER,
+        actor_id=auth.user.id if auth.user else None,
+        action="case.changed",
+        summary=(
+            f"{case.label} marked filed"
+            if changed.get("filed") is True
+            else f"{case.label} reopened"
+            if changed.get("filed") is False
+            else f"{case.label} deadline moved to {changed.get('deadline')}"
+        ),
+        details=changed,
+    )
+    await db.commit()
+    return SuccessResponse(
+        request_id=request_id, data=await _case_out(db, auth.organization_id, case)
+    )
 
 
 @router.post(

@@ -82,6 +82,27 @@ class CaseIn(BaseModel):
     document_types: list[str] | None = None
 
 
+class CasePatch(BaseModel):
+    """The two things about a case only a person can decide.
+
+    Everything else about a case's status is derived from its requirements,
+    so there is nothing else here to set: a field that let somebody type a
+    status would let the board disagree with the rows underneath it.
+    """
+
+    #: True when the firm has filed it; False to say it is not filed after
+    #: all, which puts the case back under the derived rule.
+    filed: bool | None = None
+    deadline: dt.date | None = None
+
+
+class RequirementAdd(BaseModel):
+    """One more document this filing needs."""
+
+    document_type: str = Field(..., max_length=40)
+    required: bool = True
+
+
 class CaseOut(BaseModel):
     id: str
     client_id: str

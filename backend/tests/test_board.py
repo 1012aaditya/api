@@ -19,6 +19,7 @@ import pytest
 
 from app.db.base import utcnow
 from app.db.session import get_session_factory
+from app.repositories.clients import RequirementRepository
 from app.services.board import ZONES, build_board
 from tests.conftest import Tenant
 
@@ -397,3 +398,186 @@ async def test_another_firms_client_cannot_be_messaged(
     )
 
     assert response.status_code == 404
+
+
+# --- editing the filing itself, from the board -------------------------
+#
+# The board is where the work happens, so the things a CA changes about a
+# filing have to be changeable there: one more document to ask for, one
+# that should never have been on the list, the date moving, and somebody
+# saying the return has actually been filed.
+
+
+async def case_for(client: httpx.AsyncClient, headers, name: str, **extra):
+    created = await add_client(client, headers, name)
+    return await open_case(client, headers, created["id"], **extra), created
+
+
+async def test_a_filing_can_be_asked_for_one_more_document(
+    client: httpx.AsyncClient, auth_headers
+):
+    case, _ = await case_for(client, auth_headers, "Extra Docs Traders")
+
+    updated = data(
+        await client.post(
+            f"/v1/cases/{case['id']}/requirements",
+            headers=auth_headers,
+            json={"document_type": "tds_certificate"},
+        )
+    )
+
+    assert "TDS certificate" in [r["label"] for r in updated["requirements"]]
+    assert "TDS certificate" in updated["outstanding"]
+
+
+async def test_the_same_document_cannot_be_asked_for_twice(
+    client: httpx.AsyncClient, auth_headers
+):
+    case, _ = await case_for(client, auth_headers, "Twice Traders")
+    existing = case["requirements"][0]["document_type"]
+
+    response = await client.post(
+        f"/v1/cases/{case['id']}/requirements",
+        headers=auth_headers,
+        json={"document_type": existing},
+    )
+
+    assert response.status_code == 400
+    assert "already asks for" in response.json()["error"]["message"]
+
+
+async def test_an_unknown_document_type_is_refused_by_name(
+    client: httpx.AsyncClient, auth_headers
+):
+    case, _ = await case_for(client, auth_headers, "Unknown Type Traders")
+
+    response = await client.post(
+        f"/v1/cases/{case['id']}/requirements",
+        headers=auth_headers,
+        json={"document_type": "horoscope"},
+    )
+
+    assert response.status_code == 400
+    assert "horoscope" in response.json()["error"]["message"]
+
+
+async def test_a_requirement_nothing_arrived_against_can_be_removed(
+    client: httpx.AsyncClient, auth_headers
+):
+    case, _ = await case_for(client, auth_headers, "Remove Traders")
+    target = case["requirements"][0]
+
+    updated = data(
+        await client.delete(
+            f"/v1/requirements/{target['id']}", headers=auth_headers
+        )
+    )
+
+    assert target["id"] not in [r["id"] for r in updated["requirements"]]
+
+
+async def test_a_requirement_that_has_been_received_is_not_deleted(
+    client: httpx.AsyncClient, auth_headers
+):
+    """Deleting it would quietly erase what happened. "Not needed" is the
+    honest way to close a requirement a document already arrived for."""
+    case, _ = await case_for(client, auth_headers, "Arrived Traders")
+    target = case["requirements"][0]
+    await client.patch(
+        f"/v1/requirements/{target['id']}",
+        headers=auth_headers,
+        json={"status": "received"},
+    )
+
+    response = await client.delete(
+        f"/v1/requirements/{target['id']}", headers=auth_headers
+    )
+
+    assert response.status_code == 400
+    assert "not needed" in response.json()["error"]["message"]
+
+
+async def test_a_filing_can_be_marked_filed_and_unfiled(
+    client: httpx.AsyncClient, auth_headers, tenant: Tenant
+):
+    """Filing happens on a government portal, outside this system, so a
+    person has to say it happened — and be able to take it back."""
+    case, created = await case_for(client, auth_headers, "Filed Traders")
+
+    filed = data(
+        await client.patch(
+            f"/v1/cases/{case['id']}", headers=auth_headers, json={"filed": True}
+        )
+    )
+    assert filed["status"] == "completed"
+    card = card_for(await board_for(tenant.organization_id), "Filed Traders")
+    assert card.zone == "clear"
+
+    reopened = data(
+        await client.patch(
+            f"/v1/cases/{case['id']}", headers=auth_headers, json={"filed": False}
+        )
+    )
+    # Back under the derived rule: blocked, because documents are missing.
+    assert reopened["status"] == "blocked"
+
+
+async def test_moving_a_deadline_moves_the_documents_with_it(
+    client: httpx.AsyncClient, auth_headers, tenant: Tenant
+):
+    """A requirement left on the old date would have the agent chasing to
+    a deadline the firm has already moved."""
+    case, _ = await case_for(
+        client, auth_headers, "Deadline Traders", deadline="2026-10-20"
+    )
+
+    updated = data(
+        await client.patch(
+            f"/v1/cases/{case['id']}",
+            headers=auth_headers,
+            json={"deadline": "2026-10-25"},
+        )
+    )
+
+    assert updated["deadline"] == "2026-10-25"
+    async with get_session_factory()() as session:
+        rows = await RequirementRepository(session).for_case(
+            tenant.organization_id, case["id"]
+        )
+    assert {row.deadline.isoformat() for row in rows} == {"2026-10-25"}
+
+
+async def test_a_case_change_with_nothing_in_it_is_refused(
+    client: httpx.AsyncClient, auth_headers
+):
+    case, _ = await case_for(client, auth_headers, "Empty Patch Traders")
+
+    response = await client.patch(
+        f"/v1/cases/{case['id']}", headers=auth_headers, json={}
+    )
+
+    assert response.status_code == 400
+
+
+async def test_another_firms_case_cannot_be_edited(
+    client: httpx.AsyncClient, auth_headers, other_tenant: Tenant
+):
+    case, _ = await case_for(client, auth_headers, "Ours Filing Traders")
+    signed_in = await client.post(
+        "/v1/auth/login",
+        json={"email": other_tenant.email, "password": other_tenant.password},
+    )
+    stranger = {"Authorization": f"Bearer {data(signed_in)['access_token']}"}
+
+    assert (
+        await client.patch(
+            f"/v1/cases/{case['id']}", headers=stranger, json={"filed": True}
+        )
+    ).status_code == 404
+    assert (
+        await client.post(
+            f"/v1/cases/{case['id']}/requirements",
+            headers=stranger,
+            json={"document_type": "pan"},
+        )
+    ).status_code == 404
