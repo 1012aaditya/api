@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge, Button, Spinner } from "@/components/ui";
@@ -54,7 +55,8 @@ export type PanelKey =
   | "documents"
   | "firm"
   | "plan"
-  | "data";
+  | "data"
+  | "you";
 
 export const PANEL_ORDER: PanelKey[] = [
   "clients",
@@ -66,6 +68,7 @@ export const PANEL_ORDER: PanelKey[] = [
   "firm",
   "plan",
   "data",
+  "you",
 ];
 
 export const PANEL_LABELS: Record<PanelKey, string> = {
@@ -78,6 +81,7 @@ export const PANEL_LABELS: Record<PanelKey, string> = {
   firm: "Who works here",
   plan: "Plan and usage",
   data: "What is held, and where",
+  you: "You, and the way out",
 };
 
 /* --- the small card, closed ------------------------------------------- */
@@ -1230,6 +1234,92 @@ function DataPanel(props: PanelProps) {
   );
 }
 
+/* --- you, and everything that is not the practice ---------------------- */
+
+/** The pages the board does not replace, and is not trying to. */
+const ELSEWHERE: { heading: string; links: [string, string, boolean?][] }[] = [
+  {
+    heading: "The same work, as long lists",
+    links: [
+      ["/command-centre", "Today"],
+      ["/cases", "Cases"],
+      ["/conversations", "Conversations"],
+      ["/documents", "Documents"],
+      ["/clients", "Clients"],
+    ],
+  },
+  {
+    heading: "The API behind it",
+    links: [
+      ["/playground", "Playground"],
+      ["/docs", "Docs"],
+      ["/batches", "Bulk upload"],
+      ["/tally", "Post to Tally"],
+      ["/dashboard", "API usage"],
+      ["/webhooks", "Webhooks"],
+      ["/api-keys", "API keys", true],
+    ],
+  },
+];
+
+function YouPanel(props: PanelProps) {
+  const { user, logout } = useAuth();
+  const privileged = user?.role === "owner" || user?.role === "admin";
+
+  return (
+    <Frame
+      title="You, and the way out"
+      note={null}
+      width={props.width}
+      height={props.height}
+      onClose={props.onClose}
+      footer={
+        <Button size="sm" variant="danger" onClick={logout}>
+          Sign out
+        </Button>
+      }
+    >
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+        <dt className="text-ink-2">Signed in as</dt>
+        <dd className="truncate text-ink">{user?.email ?? "—"}</dd>
+        <dt className="text-ink-2">You are</dt>
+        <dd className="text-ink">{user?.role ?? "—"}</dd>
+        <dt className="text-ink-2">This firm</dt>
+        <dd className="truncate text-ink">{user?.organization.name ?? "—"}</dd>
+      </dl>
+
+      {ELSEWHERE.map((group) => (
+        <div key={group.heading} className="mt-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">
+            {group.heading}
+          </p>
+          <ul className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5">
+            {group.links
+              // A link that can only answer 403 is not a link.
+              .filter(([, , needsRole]) => !needsRole || privileged)
+              .map(([href, label]) => (
+                <li key={href}>
+                  <Link
+                    href={href}
+                    className="block truncate rounded px-1 py-0.5 text-sm text-ink-2 underline-offset-2 hover:bg-surface-sunken hover:text-ink hover:underline"
+                  >
+                    {label}
+                  </Link>
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
+
+      <p className="mt-4 text-xs text-muted">
+        Everything a practice does is on the board itself. These pages are the
+        same records as rows, for when you want to sort, export or hand
+        something to a developer.
+      </p>
+    </Frame>
+  );
+}
+
 /* --- the one a board asks for ----------------------------------------- */
 
 interface PanelProps {
@@ -1262,5 +1352,7 @@ export function FirmPanel({ panel, ...props }: PanelProps & { panel: PanelKey })
       return <PlanPanel {...props} />;
     case "data":
       return <DataPanel {...props} />;
+    case "you":
+      return <YouPanel {...props} />;
   }
 }

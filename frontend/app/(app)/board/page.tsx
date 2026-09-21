@@ -12,6 +12,7 @@ import {
   PANEL_ORDER,
   type PanelKey,
 } from "@/components/FirmPanels";
+import { Wordmark } from "@/components/Wordmark";
 import { Button, ErrorNotice, Spinner } from "@/components/ui";
 import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -238,6 +239,7 @@ export default function BoardPage() {
       urgent: false,
     },
     plan: { line: "The allowance and what it costs", urgent: false },
+    you: { line: "Signed in, and the older pages", urgent: false },
     data: { line: "Retention, and where files live", urgent: false },
     attention: {
       line: summary
@@ -452,9 +454,12 @@ export default function BoardPage() {
   }
 
   return (
-    <div className="fixed inset-0 flex flex-col lg:left-44">
+    <div className="fixed inset-0 flex flex-col">
       {/* --- the bar ---------------------------------------------------- */}
       <header className="z-20 flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2.5">
+        <Link href="/board" aria-label="DocuParse">
+          <Wordmark />
+        </Link>
         <h1 className="text-sm font-semibold text-ink">The month</h1>
         <input
           ref={search}
@@ -472,11 +477,6 @@ export default function BoardPage() {
           <Button size="sm" variant="primary" disabled={busy} onClick={() => void chase(false)}>
             Chase what needs chasing
           </Button>
-          <Link href="/command-centre">
-            <Button size="sm" variant="ghost">
-              List view
-            </Button>
-          </Link>
         </div>
       </header>
 

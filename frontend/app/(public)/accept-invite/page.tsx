@@ -30,7 +30,7 @@ function AcceptInviteForm() {
       setToken(joined.access_token);
       // A full load rather than a client-side push: the auth provider reads
       // the stored token when it mounts.
-      window.location.href = "/command-centre";
+      window.location.href = "/board";
     } catch (caught) {
       if (caught instanceof ApiRequestError) setError(caught);
       else throw caught;

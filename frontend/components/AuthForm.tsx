@@ -20,7 +20,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!loading && user) router.replace("/command-centre");
+    if (!loading && user) router.replace("/board");
   }, [user, loading, router]);
 
   async function onSubmit(event: FormEvent) {
@@ -30,7 +30,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     try {
       if (mode === "login") await login(email, password);
       else await signup(email, password, organization);
-      router.push("/command-centre");
+      router.push("/board");
     } catch (caught) {
       setError(
         caught instanceof ApiRequestError
