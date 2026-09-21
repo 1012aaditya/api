@@ -638,3 +638,38 @@ export interface Statement {
   payment_note: string;
   warnings: string[];
 }
+
+/* --- the board -------------------------------------------------------- */
+
+export interface BoardZone {
+  key: string;
+  label: string;
+  note: string;
+  count: number;
+}
+
+export interface BoardCard {
+  client_id: string;
+  name: string;
+  /** Derived from state on every read, never from where a card was dragged. */
+  zone: string;
+  /** One line saying why the card is where it is. */
+  reason: string;
+  case_id: string | null;
+  period: string | null;
+  deadline: string | null;
+  days_left: number | null;
+  contact_state: string;
+  last_contacted_at: string | null;
+  last_response_at: string | null;
+  outstanding: string[];
+  exceptions: number;
+  tasks_overdue: number;
+  automated: boolean;
+}
+
+export interface BoardData {
+  generated_at: string | null;
+  zones: BoardZone[];
+  cards: BoardCard[];
+}

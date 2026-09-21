@@ -17,6 +17,7 @@ const NAV: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Practice",
     items: [
+      { href: "/board", label: "The month" },
       { href: "/command-centre", label: "Today" },
       { href: "/clients", label: "Clients" },
       { href: "/cases", label: "Cases" },
