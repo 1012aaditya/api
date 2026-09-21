@@ -3,22 +3,29 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BoardInspector } from "@/components/BoardInspector";
+import { CardDetail } from "@/components/CardDetail";
 import { Canvas, type Viewport } from "@/components/Canvas";
-import { Badge, Button, ErrorNotice, Spinner } from "@/components/ui";
+import { Button, ErrorNotice, Spinner } from "@/components/ui";
 import { ApiRequestError, apiGet, apiSend } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import type { AgentRunResult, BoardCard, BoardData } from "@/lib/types";
 
 /* --- layout ------------------------------------------------------------
  * Cards are laid out, never placed by hand. Position means state, so a
- * card somebody dragged would be a lie the board tells about a client.  */
+ * card somebody dragged would be a lie the board tells about a client.
+ *
+ * Opening a card does not dock a panel on the right: the card grows where
+ * it stands, and the cards below and to the right of it move out of the
+ * way. You never lose the place of the client you are working on.       */
 
 const COLUMN_WIDTH = 300;
 const COLUMN_GAP = 40;
 const CARD_HEIGHT = 128;
 const CARD_GAP = 14;
 const HEADER = 92;
+
+const DETAIL_WIDTH = 660;
+const DETAIL_HEIGHT = 470;
 
 const ZONE_TONE: Record<string, { bar: string; text: string }> = {
   needs_you: { bar: "bg-critical", text: "text-critical" },
@@ -28,24 +35,15 @@ const ZONE_TONE: Record<string, { bar: string; text: string }> = {
   clear: { bar: "bg-axis", text: "text-muted" },
 };
 
-function position(zoneIndex: number, row: number) {
-  return {
-    left: zoneIndex * (COLUMN_WIDTH + COLUMN_GAP),
-    top: HEADER + row * (CARD_HEIGHT + CARD_GAP),
-  };
-}
-
-/* --- a card ----------------------------------------------------------- */
+/* --- a card, closed --------------------------------------------------- */
 
 function Card({
   card,
   dimmed,
-  selected,
   onOpen,
 }: {
   card: BoardCard;
   dimmed: boolean;
-  selected: boolean;
   onOpen: () => void;
 }) {
   const tone = ZONE_TONE[card.zone] ?? ZONE_TONE.clear;
@@ -56,9 +54,9 @@ function Card({
       data-card
       onClick={onOpen}
       style={{ width: COLUMN_WIDTH, height: CARD_HEIGHT }}
-      className={`flex flex-col items-start rounded-lg border bg-surface p-3 text-left transition-all ${
-        selected ? "border-accent ring-2 ring-accent/30" : "border-line hover:border-ink-2"
-      } ${dimmed ? "opacity-25" : "opacity-100"}`}
+      className={`flex flex-col items-start rounded-lg border border-line bg-surface p-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent hover:shadow-md ${
+        dimmed ? "opacity-25 hover:opacity-100" : "opacity-100"
+      }`}
     >
       <div className="flex w-full items-start justify-between gap-2">
         <span className="truncate text-sm font-medium text-ink">{card.name}</span>
@@ -103,12 +101,28 @@ export default function BoardPage() {
   const [error, setError] = useState<ApiRequestError | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<BoardCard | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [run, setRun] = useState<AgentRunResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [viewport, setViewport] = useState<Viewport>({ x: 48, y: 24, scale: 0.85 });
+  const [glide, setGlide] = useState(false);
   const search = useRef<HTMLInputElement>(null);
   const stage = useRef<HTMLDivElement>(null);
+  /** Where the eye was before a card was opened, to give it back after. */
+  const restore = useRef<Viewport | null>(null);
+  const settle = useRef<number | null>(null);
+
+  /** Move the view ourselves, with the animation a hand-pan must not have. */
+  const glideTo = useCallback((next: Viewport) => {
+    setGlide(true);
+    setViewport(next);
+    if (settle.current) window.clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => setGlide(false), 340);
+  }, []);
+
+  useEffect(() => () => {
+    if (settle.current) window.clearTimeout(settle.current);
+  }, []);
 
   /** Scale so every column is on screen, which is what "fit" has to mean
    *  on a board whose whole point is seeing the month at once. */
@@ -117,8 +131,8 @@ export default function BoardPage() {
     const columns = board?.zones.length ?? 5;
     const content = columns * (COLUMN_WIDTH + COLUMN_GAP);
     const scale = width ? Math.min(1, Math.max(0.3, (width - 48) / content)) : 0.85;
-    setViewport({ x: 24, y: 16, scale });
-  }, [board]);
+    glideTo({ x: 24, y: 16, scale });
+  }, [board, glideTo]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -143,6 +157,94 @@ export default function BoardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.generated_at]);
 
+  const needle = query.trim().toLowerCase();
+  const matches = useCallback(
+    (card: BoardCard) => !needle || card.name.toLowerCase().includes(needle),
+    [needle],
+  );
+  const found = board?.cards.filter(matches).length ?? 0;
+
+  /* --- where everything sits, given what is open --------------------- */
+
+  const layout = useMemo(() => {
+    const zones = board?.zones ?? [];
+    const rows: Record<string, number> = {};
+    const base = (board?.cards ?? []).map((card) => {
+      const zoneIndex = Math.max(
+        zones.findIndex((zone) => zone.key === card.zone),
+        0,
+      );
+      const row = rows[card.zone] ?? 0;
+      rows[card.zone] = row + 1;
+      return { card, zoneIndex, row };
+    });
+
+    const open = base.find((entry) => entry.card.client_id === openId) ?? null;
+    const dx = DETAIL_WIDTH - COLUMN_WIDTH;
+    const dy = DETAIL_HEIGHT - CARD_HEIGHT;
+
+    // The opened card keeps its own coordinates; only what it would cover
+    // moves. That is what makes the growth read as this card, not a panel.
+    const placed = base.map((entry) => ({
+      ...entry,
+      left:
+        entry.zoneIndex * (COLUMN_WIDTH + COLUMN_GAP) +
+        (open && entry.zoneIndex > open.zoneIndex ? dx : 0),
+      top:
+        HEADER +
+        entry.row * (CARD_HEIGHT + CARD_GAP) +
+        (open && entry.zoneIndex === open.zoneIndex && entry.row > open.row ? dy : 0),
+    }));
+
+    const tallest = Math.max(...zones.map((zone) => zone.count), 1);
+    return {
+      open,
+      placed,
+      columns: zones.map(
+        (_, index) =>
+          index * (COLUMN_WIDTH + COLUMN_GAP) + (open && index > open.zoneIndex ? dx : 0),
+      ),
+      width: Math.max(zones.length, 1) * (COLUMN_WIDTH + COLUMN_GAP) + (open ? dx : 0),
+      height: HEADER + tallest * (CARD_HEIGHT + CARD_GAP) + (open ? dy : 0) + 80,
+    };
+  }, [board, openId]);
+
+  const opened = layout.open;
+
+  const close = useCallback(() => {
+    if (!openId) return;
+    setOpenId(null);
+    if (restore.current) {
+      glideTo(restore.current);
+      restore.current = null;
+    }
+  }, [openId, glideTo]);
+
+  /** Open a card where it stands, and bring the eye to it. */
+  const open = useCallback(
+    (card: BoardCard, left: number, top: number) => {
+      const frame = stage.current;
+      setOpenId(card.client_id);
+      if (!frame) return;
+      if (!restore.current) restore.current = viewport;
+      const width = frame.clientWidth;
+      const height = frame.clientHeight;
+      const scale = Math.min(
+        1,
+        Math.max(
+          0.45,
+          Math.min((width - 80) / DETAIL_WIDTH, (height - 80) / DETAIL_HEIGHT),
+        ),
+      );
+      glideTo({
+        scale,
+        x: width / 2 - (left + DETAIL_WIDTH / 2) * scale,
+        y: height / 2 - (top + DETAIL_HEIGHT / 2) * scale,
+      });
+    },
+    [viewport, glideTo],
+  );
+
   // "/" focuses search — the fastest way to find one client among four
   // hundred, which is the thing a board is otherwise worse at than a list.
   useEffect(() => {
@@ -155,31 +257,13 @@ export default function BoardPage() {
         search.current?.focus();
       }
       if (event.key === "Escape") {
-        setSelected(null);
+        close();
         search.current?.blur();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  const needle = query.trim().toLowerCase();
-  const matches = useCallback(
-    (card: BoardCard) => !needle || card.name.toLowerCase().includes(needle),
-    [needle],
-  );
-  const found = board?.cards.filter(matches).length ?? 0;
-
-  const placed = useMemo(() => {
-    if (!board) return [];
-    const rows: Record<string, number> = {};
-    return board.cards.map((card) => {
-      const zoneIndex = board.zones.findIndex((z) => z.key === card.zone);
-      const row = rows[card.zone] ?? 0;
-      rows[card.zone] = row + 1;
-      return { card, ...position(Math.max(zoneIndex, 0), row) };
-    });
-  }, [board]);
+  }, [close]);
 
   async function chase(dryRun: boolean) {
     setBusy(true);
@@ -203,8 +287,6 @@ export default function BoardPage() {
     );
   }
 
-  const tallest = Math.max(...(board?.zones.map((z) => z.count) ?? [0]), 1);
-
   return (
     <div className="fixed inset-0 flex flex-col lg:left-56">
       {/* --- the bar ---------------------------------------------------- */}
@@ -217,11 +299,7 @@ export default function BoardPage() {
           placeholder="Find a client    /"
           className="w-56 rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none"
         />
-        {needle && (
-          <span className="text-xs text-muted">
-            {found} matching
-          </span>
-        )}
+        {needle && <span className="text-xs text-muted">{found} matching</span>}
 
         <div className="ml-auto flex items-center gap-2">
           <Button size="sm" disabled={busy} onClick={() => void chase(true)}>
@@ -262,42 +340,61 @@ export default function BoardPage() {
       )}
 
       {/* --- the board -------------------------------------------------- */}
-      <div className="flex min-h-0 flex-1">
       <div ref={stage} className="relative min-h-0 flex-1 bg-surface-sunken">
-        <Canvas viewport={viewport} onViewportChange={setViewport}>
-          <div
-            style={{
-              width: (board?.zones.length ?? 5) * (COLUMN_WIDTH + COLUMN_GAP),
-              height: HEADER + tallest * (CARD_HEIGHT + CARD_GAP) + 80,
-            }}
-          >
+        <Canvas
+          viewport={viewport}
+          onViewportChange={(next) => {
+            setGlide(false);
+            setViewport(next);
+          }}
+          onBackgroundClick={close}
+          glide={glide}
+        >
+          <div style={{ width: layout.width, height: layout.height }}>
             {board?.zones.map((zone, index) => (
               <div
                 key={zone.key}
-                className="absolute"
-                style={{ left: index * (COLUMN_WIDTH + COLUMN_GAP), top: 0, width: COLUMN_WIDTH }}
+                className="absolute transition-[left] duration-300 ease-out"
+                style={{ left: layout.columns[index], top: 0, width: COLUMN_WIDTH }}
               >
                 <div
                   className={`h-1 w-full rounded-full ${(ZONE_TONE[zone.key] ?? ZONE_TONE.clear).bar}`}
                 />
                 <p className="mt-2 text-sm font-semibold text-ink">
-                  {zone.label}{" "}
-                  <span className="tnum font-normal text-muted">{zone.count}</span>
+                  {zone.label} <span className="tnum font-normal text-muted">{zone.count}</span>
                 </p>
                 <p className="mt-0.5 text-xs text-muted">{zone.note}</p>
               </div>
             ))}
 
-            {placed.map(({ card, left, top }) => (
-              <div key={card.client_id} className="absolute" style={{ left, top }}>
-                <Card
-                  card={card}
-                  dimmed={!matches(card)}
-                  selected={selected?.client_id === card.client_id}
-                  onOpen={() => setSelected(card)}
-                />
-              </div>
-            ))}
+            {layout.placed.map(({ card, left, top }) => {
+              const isOpen = card.client_id === openId;
+              return (
+                <div
+                  key={card.client_id}
+                  className="absolute transition-[left,top] duration-300 ease-out"
+                  style={{ left, top, zIndex: isOpen ? 10 : 1 }}
+                >
+                  {isOpen ? (
+                    <div className="card-open">
+                      <CardDetail
+                        card={card}
+                        width={DETAIL_WIDTH}
+                        height={DETAIL_HEIGHT}
+                        onClose={close}
+                        onChanged={load}
+                      />
+                    </div>
+                  ) : (
+                    <Card
+                      card={card}
+                      dimmed={!matches(card) || (opened !== null && !isOpen)}
+                      onOpen={() => open(card, left, top)}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Canvas>
 
@@ -309,26 +406,21 @@ export default function BoardPage() {
           </div>
         )}
 
-        {/* --- the inspector -------------------------------------------- */}
-        {/* closes the stage; the inspector is a sibling so it takes space
-            rather than covering the columns on the right. */}
         <p className="pointer-events-none absolute bottom-3 left-4 z-10 text-xs text-muted">
-          Drag to pan · ⌘/ctrl + scroll to zoom · / to find a client · Esc to close
+          {opened
+            ? "Everything about them is here · Esc, or click the paper, to close"
+            : "Click a card to open it in place · drag to pan · ⌘/ctrl + scroll to zoom · / to find a client"}
         </p>
         <div className="absolute bottom-3 right-4 z-10 flex gap-1.5">
+          {opened && (
+            <Button size="sm" onClick={close}>
+              Back to the board
+            </Button>
+          )}
           <Button size="sm" onClick={fit}>
             Fit
           </Button>
         </div>
-      </div>
-
-        {selected && (
-          <BoardInspector
-            card={selected}
-            onClose={() => setSelected(null)}
-            onChanged={load}
-          />
-        )}
       </div>
     </div>
   );

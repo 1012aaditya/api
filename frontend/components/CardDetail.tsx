@@ -17,12 +17,17 @@ import type {
 } from "@/lib/types";
 
 /**
- * Everything a CA does to one client, without leaving the board.
+ * A card that has been opened, still standing where it stood.
  *
- * The rule the panel follows: after any action it reloads both itself and
- * the board. An action whose effect you cannot see is an action you do
- * twice — and on a board where position means state, a card sitting in the
- * wrong column after you fixed it is the interface lying.
+ * This is the same component the board draws collapsed, grown: it keeps the
+ * client's place in their column, so opening one never costs you the sense
+ * of where they are. Nothing docks, nothing slides in from the side, and
+ * the cards around it move out of its way rather than being covered by it.
+ *
+ * The rule every action follows: after it runs, reload this panel *and* the
+ * board. An action whose effect you cannot see is an action you do twice —
+ * and on a board where position means state, a card sitting in the wrong
+ * column after you fixed it is the interface lying.
  */
 
 const REQUIREMENT_TONE: Record<string, string> = {
@@ -38,19 +43,23 @@ const REQUIREMENT_TONE: Record<string, string> = {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mt-5">
+    <section className="mt-4 first:mt-0">
       <p className="text-xs font-medium uppercase tracking-wide text-muted">{title}</p>
       <div className="mt-1.5">{children}</div>
     </section>
   );
 }
 
-export function BoardInspector({
+export function CardDetail({
   card,
+  width,
+  height,
   onClose,
   onChanged,
 }: {
   card: BoardCard;
+  width: number;
+  height: number;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -108,49 +117,73 @@ export function BoardInspector({
     }
   }
 
-  const outstanding = kase?.requirements ?? [];
+  async function send() {
+    const body = draft.trim();
+    if (!body || busy !== null) return;
+    await act("send", async () => {
+      await apiSend(`/v1/clients/${card.client_id}/messages`, {
+        body,
+        case_id: card.case_id,
+      });
+      setDraft("");
+      return "Sent.";
+    });
+  }
+
+  const requirements = kase?.requirements ?? [];
 
   return (
-    <aside
-      data-inspector
+    <div
+      data-card
+      data-detail
+      role="dialog"
       aria-label={`${card.name} details`}
-      className="flex h-full w-[22rem] shrink-0 flex-col overflow-y-auto border-l border-line bg-surface"
+      style={{ width, height }}
+      className="flex flex-col overflow-hidden rounded-xl border border-accent bg-surface text-left shadow-2xl ring-4 ring-accent-100"
     >
-      <header className="sticky top-0 z-10 border-b border-line bg-surface px-5 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <h2 className="text-base font-semibold text-ink">{card.name}</h2>
-          <button
-            className="text-sm text-muted hover:text-ink"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ✕
-          </button>
+      {/* --- the head of the card, grown ------------------------------- */}
+      <header className="flex items-start gap-3 border-b border-line px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-base font-semibold text-ink">{card.name}</h2>
+          <p className="mt-0.5 text-sm text-ink-2">{card.reason}</p>
         </div>
-        <p className="mt-1 text-sm text-ink-2">{card.reason}</p>
         {card.period && (
-          <p className="mt-1 font-mono text-xs text-muted">
+          <p className="shrink-0 pt-0.5 text-right font-mono text-xs text-muted">
             {card.period}
-            {card.days_left !== null &&
-              ` · ${card.days_left < 0 ? `${Math.abs(card.days_left)} d overdue` : `${card.days_left} d left`}`}
+            {card.days_left !== null && (
+              <span
+                className={`mt-0.5 block ${card.days_left <= 3 ? "text-critical" : "text-muted"}`}
+              >
+                {card.days_left < 0
+                  ? `${Math.abs(card.days_left)} d overdue`
+                  : `${card.days_left} d left`}
+              </span>
+            )}
           </p>
         )}
+        <button
+          className="-mr-1 shrink-0 rounded px-1.5 text-sm text-muted hover:text-ink"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          ✕
+        </button>
       </header>
 
-      <div className="px-5 pb-6">
-        {note && (
-          <p className="mt-4 rounded-md border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-2">
-            {note}
-          </p>
-        )}
+      {note && (
+        <p className="border-b border-line bg-surface-sunken px-4 py-2 text-sm text-ink-2">
+          {note}
+        </p>
+      )}
 
-        {loading ? (
-          <div className="py-10 text-center">
-            <Spinner />
-          </div>
-        ) : (
-          <>
-            {/* --- chase this one ---------------------------------------- */}
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center">
+          <Spinner />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          {/* --- what you can do about them --------------------------- */}
+          <div data-scroll className="min-w-0 flex-1 overflow-y-auto px-4 py-3">
             <Section title="Chase">
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -180,9 +213,7 @@ export function BoardInspector({
                         case_id: card.case_id,
                         dry_run: false,
                       });
-                      return r.sent > 0
-                        ? "Message sent."
-                        : r.skipped[0] ?? "Nothing was sent.";
+                      return r.sent > 0 ? "Message sent." : r.skipped[0] ?? "Nothing was sent.";
                     })
                   }
                 >
@@ -211,18 +242,17 @@ export function BoardInspector({
               </div>
             </Section>
 
-            {/* --- requirements, tickable -------------------------------- */}
-            {outstanding.length > 0 && (
+            {requirements.length > 0 && (
               <Section title="What this filing needs">
                 <ul className="space-y-1">
-                  {outstanding.map((requirement) => {
+                  {requirements.map((requirement) => {
                     const settled = ["valid", "received", "processing", "waived"].includes(
                       requirement.status,
                     );
                     return (
                       <li
                         key={requirement.id}
-                        className="flex items-center justify-between gap-2 py-0.5"
+                        className="flex items-center justify-between gap-2 rounded-md px-1 py-0.5 hover:bg-surface-sunken"
                       >
                         <span className="min-w-0">
                           <span className="block truncate text-sm text-ink">
@@ -278,7 +308,6 @@ export function BoardInspector({
               </Section>
             )}
 
-            {/* --- what needs a person ----------------------------------- */}
             {exceptions.length > 0 && (
               <Section title="Needs a person">
                 <ul className="space-y-2">
@@ -306,7 +335,6 @@ export function BoardInspector({
               </Section>
             )}
 
-            {/* --- tasks ------------------------------------------------- */}
             {tasks.length > 0 && (
               <Section title="Your tasks">
                 <ul className="space-y-1">
@@ -332,73 +360,6 @@ export function BoardInspector({
               </Section>
             )}
 
-            {/* --- the thread, with a reply box -------------------------- */}
-            <Section title="WhatsApp">
-              {thread && thread.messages.length > 0 ? (
-                <ul className="max-h-56 space-y-1.5 overflow-y-auto">
-                  {thread.messages.slice(-8).map((message) => (
-                    <li
-                      key={message.id}
-                      className={`rounded-md px-2.5 py-1.5 text-sm ${
-                        message.direction === "outbound"
-                          ? "bg-surface-sunken text-ink"
-                          : "border border-line text-ink"
-                      }`}
-                    >
-                      {message.body}
-                      <span className="mt-0.5 block text-[11px] text-muted">
-                        {message.direction === "outbound"
-                          ? message.sent_by_agent
-                            ? "the agent"
-                            : "you"
-                          : "them"}{" "}
-                        · {relativeTime(message.created_at)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-ink-2">Nothing has been sent yet.</p>
-              )}
-
-              <div className="mt-2 flex gap-1.5">
-                <input
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && draft.trim() && busy === null) {
-                      void act("send", async () => {
-                        await apiSend(`/v1/clients/${card.client_id}/messages`, {
-                          body: draft.trim(),
-                          case_id: card.case_id,
-                        });
-                        setDraft("");
-                        return "Sent.";
-                      });
-                    }
-                  }}
-                  placeholder="Write to them yourself…"
-                  className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none"
-                />
-                <Button
-                  size="sm"
-                  disabled={busy !== null || !draft.trim()}
-                  onClick={() =>
-                    act("send", async () => {
-                      await apiSend(`/v1/clients/${card.client_id}/messages`, {
-                        body: draft.trim(),
-                        case_id: card.case_id,
-                      });
-                      setDraft("");
-                      return "Sent.";
-                    })
-                  }
-                >
-                  Send
-                </Button>
-              </div>
-            </Section>
-
             <Section title="Where things stand">
               <dl className="space-y-1 text-sm">
                 {[
@@ -415,7 +376,7 @@ export function BoardInspector({
               </dl>
             </Section>
 
-            <div className="mt-5 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <Badge>{card.zone.replace(/_/g, " ")}</Badge>
               <Link href={`/clients/${card.client_id}`} className="ml-auto">
                 <Button size="sm" variant="ghost">
@@ -423,9 +384,56 @@ export function BoardInspector({
                 </Button>
               </Link>
             </div>
-          </>
-        )}
-      </div>
-    </aside>
+          </div>
+
+          {/* --- what they have said ---------------------------------- */}
+          <div className="flex w-[17rem] shrink-0 flex-col border-l border-line bg-surface-sunken">
+            <p className="px-4 pt-3 text-xs font-medium uppercase tracking-wide text-muted">
+              WhatsApp
+            </p>
+            <div data-scroll className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 py-2">
+              {thread && thread.messages.length > 0 ? (
+                thread.messages.slice(-12).map((message) => (
+                  <div
+                    key={message.id}
+                    className={`rounded-md px-2.5 py-1.5 text-sm ${
+                      message.direction === "outbound"
+                        ? "ml-4 bg-accent-100 text-ink"
+                        : "mr-4 border border-line bg-surface text-ink"
+                    }`}
+                  >
+                    {message.body}
+                    <span className="mt-0.5 block text-[11px] text-muted">
+                      {message.direction === "outbound"
+                        ? message.sent_by_agent
+                          ? "the agent"
+                          : "you"
+                        : "them"}{" "}
+                      · {relativeTime(message.created_at)}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-ink-2">Nothing has been sent yet.</p>
+              )}
+            </div>
+            <div className="flex gap-1.5 border-t border-line p-2.5">
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void send();
+                }}
+                placeholder="Write to them yourself…"
+                className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none"
+              />
+              <Button size="sm" disabled={busy !== null || !draft.trim()} onClick={() => void send()}>
+                Send
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

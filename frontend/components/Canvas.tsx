@@ -12,6 +12,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *
  * Drag anywhere to pan, wheel or pinch to zoom, and the zoom holds the
  * point under the cursor still — anything else feels broken to a hand.
+ *
+ * Two things are let through rather than captured: a wheel inside anything
+ * marked ``data-scroll`` (an opened card's own list scrolls; the board does
+ * not move under it) and a click on bare paper, which the board uses to
+ * close whatever is open.
  */
 export interface Viewport {
   x: number;
@@ -25,14 +30,21 @@ const MAX_SCALE = 1.6;
 export function Canvas({
   viewport,
   onViewportChange,
+  onBackgroundClick,
+  glide = false,
   children,
 }: {
   viewport: Viewport;
   onViewportChange: (next: Viewport) => void;
+  /** A press and release on bare paper, with no pan in between. */
+  onBackgroundClick?: () => void;
+  /** Animate the transform, for a move the board made rather than the hand. */
+  glide?: boolean;
   children: React.ReactNode;
 }) {
   const frame = useRef<HTMLDivElement>(null);
   const dragging = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  const moved = useRef(false);
   const [grabbing, setGrabbing] = useState(false);
 
   const zoomAt = useCallback(
@@ -59,6 +71,8 @@ export function Canvas({
     if (!node) return;
     // Non-passive, because zooming has to stop the page scrolling with it.
     const onWheel = (event: WheelEvent) => {
+      // An opened card's own lists scroll themselves.
+      if ((event.target as HTMLElement).closest?.("[data-scroll]")) return;
       if (!event.ctrlKey && !event.metaKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
         return; // a horizontal trackpad swipe is a pan, not a zoom
       }
@@ -83,12 +97,16 @@ export function Canvas({
         // Only the background pans; a card must stay clickable.
         if ((event.target as HTMLElement).closest("[data-card]")) return;
         dragging.current = { x: event.clientX, y: event.clientY, vx: viewport.x, vy: viewport.y };
+        moved.current = false;
         setGrabbing(true);
         (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
       }}
       onPointerMove={(event) => {
         const start = dragging.current;
         if (!start) return;
+        if (Math.abs(event.clientX - start.x) + Math.abs(event.clientY - start.y) > 4) {
+          moved.current = true;
+        }
         onViewportChange({
           ...viewport,
           x: start.vx + (event.clientX - start.x),
@@ -96,6 +114,8 @@ export function Canvas({
         });
       }}
       onPointerUp={() => {
+        // A press that went nowhere was a click on the paper, not a pan.
+        if (dragging.current && !moved.current) onBackgroundClick?.();
         dragging.current = null;
         setGrabbing(false);
       }}
@@ -119,6 +139,7 @@ export function Canvas({
         className="absolute left-0 top-0 origin-top-left"
         style={{
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
+          transition: glide ? "transform 320ms cubic-bezier(0.22, 1, 0.36, 1)" : undefined,
         }}
       >
         {children}
